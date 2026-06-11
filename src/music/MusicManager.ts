@@ -2,6 +2,7 @@ import type { ChatInputCommandInteraction, GuildMember, VoiceBasedChannel } from
 import { GuildPlayer } from './GuildPlayer.js';
 import type { FetchResult } from './types.js';
 import { fetchTracks } from './youtube.js';
+import { YtDlpCookiesFileError, YtDlpYouTubeAccessError } from './ytdlp.js';
 import { respondToInteraction } from '../utils/interaction.js';
 import { validateYouTubeInput } from '../utils/validators.js';
 
@@ -55,9 +56,12 @@ export async function resolveYouTubeTracks(
 
     return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : '不明なエラー';
+    let message = error instanceof Error ? error.message : '不明なエラー';
+    if (error instanceof YtDlpCookiesFileError || error instanceof YtDlpYouTubeAccessError) {
+      message = error.message;
+    }
     await interaction.editReply({
-      content: `YouTubeから曲情報を取得できませんでした。\n\`${message}\``,
+      content: `YouTubeから曲情報を取得できませんでした。\n${message}`,
     });
     return null;
   }

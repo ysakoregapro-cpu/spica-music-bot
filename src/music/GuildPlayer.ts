@@ -35,6 +35,7 @@ import {
 import { noopLifecycleHooks, type PlayerLifecycleHooks } from './PlayerLifecycle.js';
 import { TrackQueue } from './TrackQueue.js';
 import { isStreamTimeoutError, killAudioProcesses } from './youtube.js';
+import { isYtDlpYouTubeAccessFailure } from './ytdlp.js';
 import type { RepeatMode, Track } from './types.js';
 import { logger } from '../utils/logger.js';
 
@@ -257,6 +258,10 @@ export class GuildPlayer {
         const detail = error instanceof Error ? error.message : String(error);
         if (isStreamTimeoutError(detail)) {
           logger.warn(`Playback stream acquisition failed (timeout): ${track.title}`);
+          throw error;
+        }
+        if (isYtDlpYouTubeAccessFailure(error)) {
+          logger.warn(`Playback stream acquisition failed (YouTube access): ${track.title}`);
           throw error;
         }
         logger.warn(`Playback failed on passthrough route, retrying with FFmpeg: ${track.title} (${detail})`);
@@ -492,6 +497,8 @@ export class GuildPlayer {
       const detail = error instanceof Error ? error.message : String(error);
       if (isStreamTimeoutError(detail)) {
         logger.warn(`Advance reason: failed-track (yt-dlp timeout): ${next.title}`);
+      } else if (isYtDlpYouTubeAccessFailure(error)) {
+        logger.warn(`Advance reason: failed-track (YouTube access): ${next.title}`);
       }
       return this.advanceToNextTrack('failed-track');
     }

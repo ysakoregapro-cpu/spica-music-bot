@@ -9,6 +9,14 @@ import {
 } from './types.js';
 import { isPlaylistUrl } from '../utils/validators.js';
 import { isPremiumOnlyMessage, UnplayableTrackError } from './playbackErrors.js';
+import {
+  isYoutubeAccessError,
+  mapYtDlpProcessError,
+  sanitizeYtDlpLogText,
+  spawnYtDlpProcess,
+  throwIfYoutubeAccessError,
+  YTDLP_BIN,
+} from './ytdlp.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -177,21 +185,24 @@ function entryToTrack(entry: YtDlpEntry, requestedBy: string): Track | null {
   };
 }
 
-async function runYtDlp(args: string[]): Promise<string[]> {
+async function runYtDlp(args: readonly string[]): Promise<string[]> {
   return new Promise((resolve, reject) => {
-    const process = spawn('yt-dlp', args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
+    let process: ChildProcess;
+    try {
+      process = spawnYtDlpProcess(args);
+    } catch (error) {
+      reject(error);
+      return;
+    }
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
-    process.stdout.on('data', (chunk: Buffer) => {
+    process.stdout?.on('data', (chunk: Buffer) => {
       stdoutChunks.push(chunk);
     });
 
-    process.stderr.on('data', (chunk: Buffer) => {
+    process.stderr?.on('data', (chunk: Buffer) => {
       stderrChunks.push(chunk);
     });
 
@@ -204,12 +215,17 @@ async function runYtDlp(args: string[]): Promise<string[]> {
       const stderr = Buffer.concat(stderrChunks).toString('utf8');
 
       if (code !== 0 && stdout.trim().length === 0) {
-        reject(new Error(stderr.trim() || `yt-dlp exited with code ${String(code)}`));
+        reject(mapYtDlpProcessError(stderr, `yt-dlp exited with code ${String(code)}`));
         return;
       }
 
       if (stderr.trim()) {
-        logger.debug(`yt-dlp stderr: ${stderr.trim()}`);
+        const safeStderr = sanitizeYtDlpLogText(stderr.trim());
+        if (isYoutubeAccessError(safeStderr)) {
+          logger.warn(`yt-dlp YouTube access error: ${formatYoutubeAccessLog(safeStderr)}`);
+        } else {
+          logger.debug(`yt-dlp stderr: ${safeStderr}`);
+        }
       }
 
       resolve(
@@ -222,19 +238,48 @@ async function runYtDlp(args: string[]): Promise<string[]> {
   });
 }
 
+function formatYoutubeAccessLog(text: string): string {
+  const lower = text.toLowerCase();
+  if (lower.includes('sign in to confirm')) {
+    return 'bot confirmation required';
+  }
+  if (lower.includes('signature solving failed')) {
+    return 'signature solving failed';
+  }
+  if (lower.includes('n challenge solving failed')) {
+    return 'n challenge solving failed';
+  }
+  if (lower.includes('only images are available for download')) {
+    return 'only images available';
+  }
+  if (lower.includes('requested format is not available')) {
+    return 'requested format not available';
+  }
+  return 'YouTube access error';
+}
+
 function spawnYtDlpStream(url: string): { process: ChildProcess; stream: Readable } {
   logger.info(
-    `yt-dlp stream open: ${url} (socket-timeout=${String(YTDLP_SOCKET_TIMEOUT_SEC)}s, retries=${String(YTDLP_RETRIES)})`,
+    `yt-dlp stream open: ${url} (bin=${YTDLP_BIN}, socket-timeout=${String(YTDLP_SOCKET_TIMEOUT_SEC)}s, retries=${String(YTDLP_RETRIES)})`,
   );
 
-  const process = spawn(
-    'yt-dlp',
-    ['-f', YTDLP_AUDIO_FORMAT, '--no-playlist', ...YTDLP_NETWORK_ARGS, '-o', '-', url],
-    {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    },
-  );
+  const process = spawnYtDlpProcess([
+    '-f',
+    YTDLP_AUDIO_FORMAT,
+    '--no-playlist',
+    ...YTDLP_NETWORK_ARGS,
+    '-o',
+    '-',
+    url,
+  ]);
+
+  if (!process.stdout || !process.stderr) {
+    process.kill();
+    throw new Error('yt-dlp stdout/stderr is unavailable');
+  }
+
+  const stdout = process.stdout;
+  const stderr = process.stderr;
 
   let stderrText = '';
   let timeoutLogged = false;
@@ -249,19 +294,32 @@ function spawnYtDlpStream(url: string): { process: ChildProcess; stream: Readabl
     );
   };
 
-  process.stderr.on('data', (chunk: Buffer) => {
+  stderr.on('data', (chunk: Buffer) => {
     const text = chunk.toString('utf8');
     stderrText += text;
-    logger.debug(`yt-dlp stream stderr: ${text.trim()}`);
+    const safeText = sanitizeYtDlpLogText(text.trim());
+
+    if (isYoutubeAccessError(stderrText)) {
+      logger.warn(`yt-dlp stream YouTube access error: ${formatYoutubeAccessLog(stderrText)}`);
+    } else if (safeText) {
+      logger.debug(`yt-dlp stream stderr: ${safeText}`);
+    }
 
     if (isStreamTimeoutError(text)) {
-      logTimeoutOnce(text.trim() || url);
+      logTimeoutOnce(safeText || url);
     }
 
     if (isPremiumOnlyMessage(text) || isPremiumOnlyMessage(stderrText)) {
       logger.info(`premium-only skipped: ${url}`);
       process.kill();
-      process.stdout.destroy(new UnplayableTrackError(`premium-only: ${stderrText.trim()}`));
+      stdout.destroy(new UnplayableTrackError('premium-only track'));
+    }
+
+    try {
+      throwIfYoutubeAccessError(stderrText);
+    } catch (error) {
+      process.kill();
+      stdout.destroy(error instanceof Error ? error : new Error(String(error)));
     }
   });
 
@@ -270,11 +328,18 @@ function spawnYtDlpStream(url: string): { process: ChildProcess; stream: Readabl
       logger.info(`premium-only skipped (process exit): ${url}`);
     }
     if (code !== 0 && isStreamTimeoutError(stderrText)) {
-      logTimeoutOnce(stderrText.trim() || url);
+      logTimeoutOnce(sanitizeYtDlpLogText(stderrText.trim()) || url);
+    }
+    if (code !== 0 && isYoutubeAccessError(stderrText) && !stdout.destroyed) {
+      try {
+        throwIfYoutubeAccessError(stderrText);
+      } catch (error) {
+        stdout.destroy(error instanceof Error ? error : new Error(String(error)));
+      }
     }
   });
 
-  process.stdout.on('error', (error) => {
+  stdout.on('error', (error) => {
     if (isPremiumOnlyMessage(stderrText)) {
       return;
     }
@@ -282,12 +347,12 @@ function spawnYtDlpStream(url: string): { process: ChildProcess; stream: Readabl
     if (isStreamTimeoutError(message) || isStreamTimeoutError(stderrText)) {
       logTimeoutOnce(message || stderrText.trim() || url);
     }
-    process.stdout.destroy(error);
+    stdout.destroy(error);
   });
 
   return {
     process,
-    stream: process.stdout,
+    stream: stdout,
   };
 }
 
@@ -446,7 +511,13 @@ export async function fetchTracks(url: string, requestedBy: string): Promise<Fet
       }
 
       try {
-        const detailLines = await runYtDlp(['--dump-json', '--no-warnings', '--no-playlist', detailUrl]);
+        const detailLines = await runYtDlp([
+          '--dump-json',
+          '--no-warnings',
+          '--no-playlist',
+          ...YTDLP_NETWORK_ARGS,
+          detailUrl,
+        ]);
         if (detailLines.length === 0) {
           skippedReasons.push(`詳細情報を取得できませんでした: ${entry.title ?? detailUrl}`);
           continue;

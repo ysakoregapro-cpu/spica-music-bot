@@ -17,6 +17,7 @@ import {
   type PassthroughStreamType,
   type PreparedAudioStream,
 } from './youtube.js';
+import { isYtDlpYouTubeAccessFailure } from './ytdlp.js';
 import { logger } from '../utils/logger.js';
 
 export interface BufferedPreparedStream extends PreparedAudioStream {
@@ -65,6 +66,10 @@ function isTimeoutFailure(error: unknown): boolean {
   return isStreamTimeoutError(detail);
 }
 
+function isNonRetryableYtDlpFailure(error: unknown): boolean {
+  return isTimeoutFailure(error) || isYtDlpYouTubeAccessFailure(error);
+}
+
 export async function prepareBufferedStreamWithFallback(
   track: Track,
   options: PrepareBufferedOptions,
@@ -82,8 +87,8 @@ export async function prepareBufferedStreamWithFallback(
       throw firstError;
     }
 
-    if (isTimeoutFailure(firstError)) {
-      logger.warn(`yt-dlp stream acquisition failed (timeout), skipping fallback: ${track.title}`);
+    if (isNonRetryableYtDlpFailure(firstError)) {
+      logger.warn(`yt-dlp stream acquisition failed, skipping fallback: ${track.title}`);
       throw firstError;
     }
 
@@ -106,8 +111,8 @@ export async function prepareBufferedStreamWithFallback(
         throw secondError;
       }
 
-      if (isTimeoutFailure(secondError)) {
-        logger.warn(`yt-dlp stream acquisition failed (timeout), skipping transcode fallback: ${track.title}`);
+      if (isNonRetryableYtDlpFailure(secondError)) {
+        logger.warn(`yt-dlp stream acquisition failed, skipping transcode fallback: ${track.title}`);
         throw secondError;
       }
 
@@ -227,7 +232,9 @@ export class PrefetchManager {
       if (isUnplayableTrackError(error)) {
         logger.info(`Prefetch validation failed: ${track.title} (${detail})`);
       } else if (isStreamTimeoutError(detail)) {
-        logger.warn(`Prefetch validation timed out: ${track.title} (${detail})`);
+        logger.warn(`Prefetch validation timed out: ${track.title}`);
+      } else if (isYtDlpYouTubeAccessFailure(error)) {
+        logger.warn(`Prefetch validation failed (YouTube access): ${track.title}`);
       } else if (isPremiumOnlyMessage(detail)) {
         logger.info(`premium-only skipped (prefetch): ${track.title}`);
       } else {
