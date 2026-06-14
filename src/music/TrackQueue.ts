@@ -92,6 +92,11 @@ export class TrackQueue {
     return this.upcoming.length + (this._current ? 1 : 0);
   }
 
+  /** How many more tracks can be added without exceeding MAX_QUEUE_SIZE. */
+  availableEnqueueCount(): number {
+    return Math.max(0, MAX_QUEUE_SIZE - this.totalQueuedCount());
+  }
+
   enqueue(tracks: Track[]): QueueAddResult {
     const { accepted, dropped } = this.trimToQueueLimit(tracks);
     this.upcoming.push(...accepted);

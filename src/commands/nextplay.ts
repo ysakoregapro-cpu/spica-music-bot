@@ -28,12 +28,13 @@ export async function execute(
     return;
   }
 
-  const fetchResult = await resolveYouTubeTracks(interaction, url);
+  const player = musicManager.getOrCreate(ready.guildId);
+  const maxTracks = player.queue.availableEnqueueCount();
+  const fetchResult = await resolveYouTubeTracks(interaction, url, maxTracks);
   if (!fetchResult) {
     return;
   }
 
-  const player = musicManager.getOrCreate(ready.guildId);
   const addResult = player.queue.insertNext(fetchResult.tracks);
   player.notifyQueueChanged('nextplay');
   const wasIdle = !player.isPlaying && player.queue.current === null;

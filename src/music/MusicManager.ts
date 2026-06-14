@@ -1,6 +1,7 @@
 import type { ChatInputCommandInteraction, GuildMember, VoiceBasedChannel } from 'discord.js';
 import { GuildPlayer } from './GuildPlayer.js';
 import type { FetchResult } from './types.js';
+import { MAX_QUEUE_SIZE } from './types.js';
 import { fetchTracks } from './youtube.js';
 import { YtDlpCookiesFileError, YtDlpYouTubeAccessError } from './ytdlp.js';
 import { respondToInteraction } from '../utils/interaction.js';
@@ -34,6 +35,7 @@ export async function requireVoiceChannel(
 export async function resolveYouTubeTracks(
   interaction: ChatInputCommandInteraction,
   url: string,
+  maxTracks: number = MAX_QUEUE_SIZE,
 ): Promise<FetchResult | null> {
   const validationError = validateYouTubeInput(url);
   if (validationError) {
@@ -41,8 +43,15 @@ export async function resolveYouTubeTracks(
     return null;
   }
 
+  if (maxTracks <= 0) {
+    await interaction.editReply({
+      content: `キューが上限（${MAX_QUEUE_SIZE}曲）に達しているため、曲を追加できません。`,
+    });
+    return null;
+  }
+
   try {
-    const result = await fetchTracks(url, interaction.user.tag);
+    const result = await fetchTracks(url, interaction.user.tag, maxTracks);
 
     if (result.tracks.length === 0) {
       await interaction.editReply({

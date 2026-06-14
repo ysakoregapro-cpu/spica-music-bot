@@ -475,22 +475,30 @@ export async function prepareAudioStream(
   }
 }
 
-export async function fetchTracks(url: string, requestedBy: string): Promise<FetchResult> {
+export async function fetchTracks(
+  url: string,
+  requestedBy: string,
+  maxTracks: number = MAX_PLAYLIST_TRACKS,
+): Promise<FetchResult> {
   const playlist = isPlaylistUrl(url);
+  const playlistEnd = Math.min(MAX_PLAYLIST_TRACKS, Math.max(1, maxTracks));
+
   const args = playlist
     ? [
         '--dump-json',
         '--no-warnings',
         '--ignore-errors',
-        '--flat-playlist',
         '--playlist-end',
-        String(MAX_PLAYLIST_TRACKS),
+        String(playlistEnd),
         ...YTDLP_NETWORK_ARGS,
         url,
       ]
     : ['--dump-json', '--no-warnings', '--no-playlist', ...YTDLP_NETWORK_ARGS, url];
 
   const lines = await runYtDlp(args);
+  if (playlist) {
+    logger.info(`Playlist fetch: ${String(lines.length)} entries from yt-dlp (limit=${String(playlistEnd)})`);
+  }
   const tracks: Track[] = [];
   const skippedReasons: string[] = [];
 
