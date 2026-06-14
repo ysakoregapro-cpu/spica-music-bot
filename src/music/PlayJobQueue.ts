@@ -4,7 +4,7 @@ import { importPlaylist, isYouTubePlaylistUrl } from './playlistImport.js';
 import { MAX_QUEUE_SIZE, type QueueAddResult } from './types.js';
 import { fetchSingleTrack } from './youtube.js';
 import { YtDlpCookiesFileError, YtDlpYouTubeAccessError } from './ytdlp.js';
-import { formatAddResult, formatPlayJobComplete } from '../utils/format.js';
+import { formatAddResult, formatPlayJobComplete, formatPlaylistImportUserMessage } from '../utils/format.js';
 import { validateYouTubeInput } from '../utils/validators.js';
 import { getBuildLabel } from '../utils/buildInfo.js';
 import { logger } from '../utils/logger.js';
@@ -172,7 +172,7 @@ export class PlayJobQueue {
         totalSkipped = importResult.totalSkipped;
 
         logger.info(
-          `Playlist import complete: added=${String(totalAdded)} skipped=${String(totalSkipped)}`,
+          `Playlist import complete: added=${String(totalAdded)} skipped=${String(totalSkipped)} source=${importResult.source}`,
         );
 
         if (totalAdded === 0) {
@@ -189,12 +189,18 @@ export class PlayJobQueue {
           ? `▶ **${firstTrackTitle}** を再生開始しました。`
           : `**${firstTrackTitle || 'プレイリスト'}** をキューに追加しました。`;
 
-        await interaction.editReply({
-          content: `${prefix}\n${formatPlayJobComplete({
+        const importNotice = formatPlaylistImportUserMessage(importResult, totalAdded);
+        const bodyLines = [
+          importNotice,
+          formatPlayJobComplete({
             added: totalAdded,
             skipped: totalSkipped,
             queueFull: totalQueueFull,
-          })}`,
+          }),
+        ].filter((line): line is string => line != null && line.length > 0);
+
+        await interaction.editReply({
+          content: `${prefix}\n${bodyLines.join('\n')}`,
         });
         return;
       }

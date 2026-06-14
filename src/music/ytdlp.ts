@@ -24,7 +24,7 @@ export class YtDlpYouTubeAccessError extends Error {
   }
 }
 
-function resolveCookiesPath(): string | undefined {
+export function resolveCookiesPath(): string | undefined {
   const configured = process.env.YTDLP_COOKIES_PATH?.trim();
   if (!configured) {
     return undefined;

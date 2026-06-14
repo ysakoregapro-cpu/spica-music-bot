@@ -6,6 +6,7 @@ import type {
   Track,
 } from '../music/types.js';
 import { MAX_QUEUE_SIZE } from '../music/types.js';
+import type { PlaylistImportResult } from '../music/playlistImport.js';
 
 export function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
@@ -99,6 +100,32 @@ export function formatPlayJobComplete(result: {
   }
 
   return lines.join('\n');
+}
+
+export function formatPlaylistImportUserMessage(
+  importResult: PlaylistImportResult,
+  added: number,
+): string | null {
+  if (importResult.source === 'music-resolver' && added > 0) {
+    return `YouTube Musicから${added}曲を取得しました。`;
+  }
+
+  const playlistCount = importResult.playlistCount;
+  if (
+    playlistCount != null
+    && playlistCount >= 200
+    && added > 0
+    && added < playlistCount
+    && importResult.ytDlpEntryCount > 0
+    && importResult.resolverCount <= importResult.ytDlpEntryCount
+  ) {
+    return [
+      `このプレイリストはYouTube上では${playlistCount}曲ありますが、Botが取得できた再生可能な曲は${added}曲でした。`,
+      'YouTube Music専用曲、非公開曲、地域制限、またはCookieアカウントで見えない曲が含まれる可能性があります。',
+    ].join('\n');
+  }
+
+  return null;
 }
 
 export function formatAddResult(result: QueueAddResult, fetchResult: FetchResult): string {

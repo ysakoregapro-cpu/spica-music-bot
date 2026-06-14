@@ -29,6 +29,18 @@ export function isPlaylistUrl(input: string): boolean {
   return input.includes('list=');
 }
 
+export function extractPlaylistListId(input: string): string | null {
+  try {
+    const url = new URL(input);
+    const listId = url.searchParams.get('list')?.trim();
+    return listId && listId.length > 0 ? listId : null;
+  } catch {
+    const match = /[?&]list=([^&]+)/.exec(input);
+    const listId = match?.[1]?.trim();
+    return listId && listId.length > 0 ? listId : null;
+  }
+}
+
 export function validateYouTubeInput(url: string): string | null {
   if (!isValidHttpUrl(url)) {
     return 'URL形式で入力してください。';
