@@ -1,11 +1,13 @@
 import {
+  LIST_PAGE_SIZE,
+  MAX_LIST_PAGES,
   MAX_QUEUE_SIZE,
   type QueueAddResult,
+  type QueueListError,
   type QueueListView,
   type RepeatMode,
   type Track,
 } from './types.js';
-import { MAX_LIST_DISPLAY } from './types.js';
 
 export class TrackQueue {
   private upcoming: Track[] = [];
@@ -34,6 +36,7 @@ export class TrackQueue {
       return this.sessionTracks[0]!;
     }
 
+    // Shuffle repeat order is decided only when the queue wraps.
     return null;
   }
 
@@ -52,6 +55,20 @@ export class TrackQueue {
   private registerSessionTracks(tracks: Track[]): void {
     for (const track of tracks) {
       this.sessionTracks.push(track);
+    }
+  }
+
+  private shuffleArrayInPlace(tracks: Track[]): void {
+    for (let i = tracks.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [tracks[i], tracks[j]] = [tracks[j]!, tracks[i]!];
+    }
+  }
+
+  private refillUpcomingFromSession(shuffle: boolean): void {
+    this.upcoming = [...this.sessionTracks];
+    if (shuffle) {
+      this.shuffleArrayInPlace(this.upcoming);
     }
   }
 
@@ -104,11 +121,7 @@ export class TrackQueue {
       return false;
     }
 
-    for (let i = this.upcoming.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [this.upcoming[i], this.upcoming[j]] = [this.upcoming[j]!, this.upcoming[i]!];
-    }
-
+    this.shuffleArrayInPlace(this.upcoming);
     return true;
   }
 
@@ -133,7 +146,14 @@ export class TrackQueue {
     }
 
     if (this._repeatMode === 'list' && this.sessionTracks.length > 0) {
-      this.upcoming = [...this.sessionTracks];
+      this.refillUpcomingFromSession(false);
+      const next = this.upcoming.shift()!;
+      this._current = next;
+      return next;
+    }
+
+    if (this._repeatMode === 'shuffle' && this.sessionTracks.length > 0) {
+      this.refillUpcomingFromSession(true);
       const next = this.upcoming.shift()!;
       this._current = next;
       return next;
@@ -143,12 +163,32 @@ export class TrackQueue {
     return null;
   }
 
-  getListView(): QueueListView {
+  getListView(page = 1): QueueListView | QueueListError {
+    const totalUpcoming = this.upcoming.length;
+    const totalPages = totalUpcoming === 0
+      ? 1
+      : Math.min(Math.ceil(totalUpcoming / LIST_PAGE_SIZE), MAX_LIST_PAGES);
+
+    if (page < 1 || page > totalPages) {
+      return {
+        error: `そのページは存在しません。現在は 1〜${totalPages} ページです。`,
+      };
+    }
+
+    const start = (page - 1) * LIST_PAGE_SIZE;
+    const end = Math.min(start + LIST_PAGE_SIZE, totalUpcoming);
+    const rangeStart = totalUpcoming === 0 ? 0 : start + 1;
+    const rangeEnd = end;
+
     return {
       current: this._current,
-      upcoming: this.upcoming.slice(0, MAX_LIST_DISPLAY),
-      totalUpcoming: this.upcoming.length,
+      upcoming: this.upcoming.slice(start, end),
+      totalUpcoming,
       repeatMode: this._repeatMode,
+      page,
+      totalPages,
+      rangeStart,
+      rangeEnd,
     };
   }
 }

@@ -3,12 +3,20 @@ import {
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import type { MusicManager } from '../music/MusicManager.js';
+import { isQueueListError } from '../music/types.js';
 import { formatQueueList } from '../utils/format.js';
 import { replyEphemeral } from '../utils/interaction.js';
 
 export const data = new SlashCommandBuilder()
   .setName('list')
-  .setDescription('現在の曲とキュー一覧を表示します');
+  .setDescription('現在の曲とキュー一覧を表示します')
+  .addIntegerOption((option) =>
+    option
+      .setName('page')
+      .setDescription('表示するページ番号（1ページ25曲）')
+      .setMinValue(1)
+      .setRequired(false),
+  );
 
 export async function execute(
   interaction: ChatInputCommandInteraction,
@@ -25,7 +33,15 @@ export async function execute(
     return;
   }
 
+  const page = interaction.options.getInteger('page') ?? 1;
+  const result = player.queue.getListView(page);
+
+  if (isQueueListError(result)) {
+    await replyEphemeral(interaction, result.error);
+    return;
+  }
+
   await interaction.reply({
-    content: formatQueueList(player.queue.getListView()),
+    content: formatQueueList(result),
   });
 }

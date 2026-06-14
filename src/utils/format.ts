@@ -1,5 +1,11 @@
-import type { FetchResult, QueueAddResult, QueueListView, RepeatMode, Track } from '../music/types.js';
-import { MAX_LIST_DISPLAY } from '../music/types.js';
+import type {
+  FetchResult,
+  QueueAddResult,
+  QueueListView,
+  RepeatMode,
+  Track,
+} from '../music/types.js';
+import { MAX_QUEUE_SIZE } from '../music/types.js';
 
 export function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
@@ -21,6 +27,8 @@ export function formatRepeatMode(mode: RepeatMode): string {
       return '1曲リピート';
     case 'list':
       return 'リストリピート';
+    case 'shuffle':
+      return 'Shuffle Repeat';
   }
 }
 
@@ -40,19 +48,20 @@ export function formatQueueList(view: QueueListView): string {
     lines.push('');
   }
 
-  if (view.upcoming.length === 0) {
+  if (view.totalUpcoming === 0) {
     lines.push('キューは空です。');
   } else {
-    lines.push('**キュー**');
-    view.upcoming.forEach((track, index) => {
-      lines.push(formatTrackLine(index + 1, track, ''));
-    });
-  }
-
-  const remaining = view.totalUpcoming - view.upcoming.length;
-  if (remaining > 0) {
+    lines.push(`**キュー** ${view.rangeStart}-${view.rangeEnd} / ${view.totalUpcoming}`);
+    lines.push(`Page ${view.page} / ${view.totalPages}`);
     lines.push('');
-    lines.push(`ほか${remaining}件`);
+    view.upcoming.forEach((track, index) => {
+      lines.push(formatTrackLine(view.rangeStart + index, track, ''));
+    });
+
+    if (view.page < view.totalPages) {
+      lines.push('');
+      lines.push(`次ページ: \`/list page:${view.page + 1}\``);
+    }
   }
 
   lines.push('');
@@ -73,22 +82,10 @@ export function formatAddResult(result: QueueAddResult, fetchResult: FetchResult
   }
 
   if (result.queueFull > 0) {
-    lines.push(`キュー上限(100曲)のため${result.queueFull}曲を追加できませんでした。`);
+    lines.push(
+      `キュー上限(${MAX_QUEUE_SIZE}曲)のため${result.queueFull}曲を追加できませんでした。`,
+    );
   }
 
   return lines.join('\n');
-}
-
-export function buildListView(
-  current: Track | null,
-  upcoming: Track[],
-  totalUpcoming: number,
-  repeatMode: RepeatMode,
-): QueueListView {
-  return {
-    current,
-    upcoming: upcoming.slice(0, MAX_LIST_DISPLAY),
-    totalUpcoming,
-    repeatMode,
-  };
 }

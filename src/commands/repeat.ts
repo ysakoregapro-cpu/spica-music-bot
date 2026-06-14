@@ -11,6 +11,7 @@ const REPEAT_CHOICES: { name: string; value: RepeatMode }[] = [
   { name: 'off', value: 'off' },
   { name: 'one', value: 'one' },
   { name: 'list', value: 'list' },
+  { name: 'Shuffle Repeat', value: 'shuffle' },
 ];
 
 export const data = new SlashCommandBuilder()
@@ -19,7 +20,7 @@ export const data = new SlashCommandBuilder()
   .addStringOption((option) =>
     option
       .setName('mode')
-      .setDescription('off / one / list')
+      .setDescription('off / one / list / shuffle')
       .setRequired(true)
       .addChoices(...REPEAT_CHOICES),
   );

@@ -321,7 +321,10 @@ export class GuildPlayer {
   setRepeatMode(mode: RepeatMode): RepeatMode {
     const previous = this.queue.repeatMode;
     const updated = this.queue.setRepeatMode(mode);
-    if (previous !== mode && (mode === 'list' || previous === 'list')) {
+    if (
+      previous !== mode
+      && (mode === 'list' || previous === 'list' || mode === 'shuffle' || previous === 'shuffle')
+    ) {
       this.notifyQueueChanged('repeat mode changed');
     }
     return updated;
