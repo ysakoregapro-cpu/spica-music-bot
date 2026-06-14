@@ -21,6 +21,7 @@ import * as skip from './commands/skip.js';
 import * as skipto from './commands/skipto.js';
 import * as stop from './commands/stop.js';
 import { musicManager } from './music/MusicManager.js';
+import { getBuildLabel } from './utils/buildInfo.js';
 import { safeErrorReply } from './utils/interaction.js';
 import { logger } from './utils/logger.js';
 
@@ -54,6 +55,7 @@ const client = new Client({
 
 client.once(Events.ClientReady, (readyClient) => {
   logger.info(`Logged in as ${readyClient.user.tag}`);
+  logger.info(`Spica MusicBot build: ${getBuildLabel()} (startup)`);
 });
 
 client.on('error', (error) => {

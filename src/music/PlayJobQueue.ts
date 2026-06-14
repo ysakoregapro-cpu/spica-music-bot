@@ -6,6 +6,7 @@ import { fetchSingleTrack } from './youtube.js';
 import { YtDlpCookiesFileError, YtDlpYouTubeAccessError } from './ytdlp.js';
 import { formatAddResult, formatPlayJobComplete } from '../utils/format.js';
 import { validateYouTubeInput } from '../utils/validators.js';
+import { getBuildLabel } from '../utils/buildInfo.js';
 import { logger } from '../utils/logger.js';
 
 interface PlayJob {
@@ -77,7 +78,7 @@ export class PlayJobQueue {
   private async processJob(job: PlayJob): Promise<void> {
     const { guildId, interaction, url, player } = job;
 
-    logger.info(`Play job started: guild=${guildId} playlist=${String(isYouTubePlaylistUrl(url))}`);
+    logger.info(`Play job started: guild=${guildId} playlist=${String(isYouTubePlaylistUrl(url))} build=${getBuildLabel()}`);
 
     const validationError = validateYouTubeInput(url);
     if (validationError) {
@@ -86,6 +87,9 @@ export class PlayJobQueue {
     }
 
     const initialSlots = player.queue.availableEnqueueCount();
+    logger.info(
+      `Play job queue slots: availableEnqueueCount=${String(initialSlots)} limit=${String(MAX_QUEUE_SIZE)}`,
+    );
     if (initialSlots <= 0) {
       await interaction.editReply({
         content: `キューが上限（${MAX_QUEUE_SIZE}曲）に達しているため、曲を追加できません。`,
@@ -118,10 +122,13 @@ export class PlayJobQueue {
           interaction.user.tag,
           initialSlots,
           {
-            onStrategy: (strategy) => {
-              logger.info(`Playlist fetch strategy: ${strategy}`);
+            onStrategy: () => {
+              // logged inside importPlaylist
             },
-            getRemainingSlots: () => player.queue.availableEnqueueCount(),
+            getRemainingSlots: () => {
+              const slots = player.queue.availableEnqueueCount();
+              return slots;
+            },
             onChunk: async (tracks) => {
               const addResult = player.queue.enqueue(tracks);
               accumulateAdd(addResult);
@@ -131,7 +138,7 @@ export class PlayJobQueue {
               }
 
               logger.info(
-                `Playlist import progress: added=${String(totalAdded)} skipped=${String(totalSkipped)} limit=${String(MAX_QUEUE_SIZE)}`,
+                `Playlist import progress: added=${String(totalAdded)} skipped=${String(totalSkipped)} limit=${String(initialSlots)} remainingSlots=${String(player.queue.availableEnqueueCount())}`,
               );
 
               if (wasIdle && !playbackStarted && addResult.added > 0) {

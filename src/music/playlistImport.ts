@@ -1,10 +1,12 @@
 import {
   MAX_PLAYLIST_TRACKS,
   MAX_TRACK_DURATION,
+  MAX_QUEUE_SIZE,
   type FetchResult,
   type Track,
 } from './types.js';
 import { isPlaylistUrl } from '../utils/validators.js';
+import { getBuildLabel } from '../utils/buildInfo.js';
 import { logger } from '../utils/logger.js';
 import { runYtDlp } from './ytdlp.js';
 import { YTDLP_NETWORK_ARGS } from './youtube.js';
@@ -15,7 +17,10 @@ export const FLAT_SINGLE_MAX = 100;
 /** Chunk size for chunked flat-playlist fetching. */
 export const PLAYLIST_CHUNK_SIZE = 100;
 
-export type PlaylistFetchStrategy = 'flat' | 'chunked-flat' | 'full-fallback';
+/** flat-playlist often caps near this count when pagination fails. */
+export const FLAT_PLAYLIST_SUSPICIOUS_CAP = 110;
+
+export type PlaylistFetchStrategy = 'flat' | 'flat-single-json' | 'chunked-flat' | 'full-fallback';
 
 export interface PlaylistChunkInfo {
   start: number;
@@ -44,6 +49,10 @@ interface YtDlpEntry {
   duration?: number | null;
   is_live?: boolean;
   live_status?: string;
+}
+
+interface PlaylistJsonRoot {
+  entries?: YtDlpEntry[];
 }
 
 function buildVideoUrl(entry: YtDlpEntry): string | null {
@@ -143,10 +152,22 @@ function entriesToTracks(
   return tracks;
 }
 
-async function fetchFlatPlaylistArgs(
+function logStrategy(strategy: PlaylistFetchStrategy, callbacks: PlaylistImportCallbacks): void {
+  callbacks.onStrategy(strategy);
+  logger.info(`Playlist fetch strategy: ${strategy}`);
+}
+
+async function runYtDlpEntries(args: readonly string[]): Promise<YtDlpEntry[]> {
+  const safeArgs = args.filter((arg) => !arg.startsWith('http'));
+  logger.debug(`yt-dlp playlist args: ${safeArgs.join(' ')}`);
+  const lines = await runYtDlp(args);
+  return parseYtDlpLines(lines);
+}
+
+/** Flat playlist: one JSON line per entry. */
+async function fetchFlatPlaylistLines(
   url: string,
-  playlistItems: string | undefined,
-  playlistEnd: number,
+  options: { playlistItems?: string; playlistEnd?: number },
 ): Promise<YtDlpEntry[]> {
   const args: string[] = [
     '--dump-json',
@@ -155,102 +176,63 @@ async function fetchFlatPlaylistArgs(
     '--flat-playlist',
   ];
 
-  if (playlistItems) {
-    args.push('--playlist-items', playlistItems);
+  if (options.playlistItems) {
+    args.push('--playlist-items', options.playlistItems);
+  } else if (options.playlistEnd != null) {
+    args.push('--playlist-end', String(options.playlistEnd));
   }
 
-  args.push('--playlist-end', String(playlistEnd), ...YTDLP_NETWORK_ARGS, url);
+  args.push(...YTDLP_NETWORK_ARGS, url);
+  return runYtDlpEntries(args);
+}
+
+/** Flat playlist: single JSON object with entries array. */
+async function fetchFlatPlaylistSingleJson(
+  url: string,
+  limit: number,
+): Promise<YtDlpEntry[]> {
+  const args = [
+    '--dump-single-json',
+    '--no-warnings',
+    '--ignore-errors',
+    '--flat-playlist',
+    '--playlist-end',
+    String(limit),
+    ...YTDLP_NETWORK_ARGS,
+    url,
+  ];
 
   const lines = await runYtDlp(args);
-  return parseYtDlpLines(lines);
-}
-
-async function deliverChunk(
-  entries: YtDlpEntry[],
-  requestedBy: string,
-  chunkStart: number,
-  skippedReasons: string[],
-  callbacks: PlaylistImportCallbacks,
-): Promise<number> {
-  if (entries.length === 0) {
-    return 0;
+  if (lines.length === 0) {
+    return [];
   }
 
-  const tracks = entriesToTracks(entries, requestedBy, skippedReasons);
-  const chunkEnd = chunkStart + entries.length - 1;
-  logger.info(
-    `Playlist chunk fetched: start=${String(chunkStart)} end=${String(chunkEnd)} count=${String(entries.length)}`,
-  );
-
-  if (tracks.length > 0) {
-    await callbacks.onChunk(tracks, {
-      start: chunkStart,
-      end: chunkEnd,
-      count: tracks.length,
-    });
+  try {
+    const root = JSON.parse(lines[0]!) as PlaylistJsonRoot;
+    return root.entries ?? [];
+  } catch {
+    logger.warn('Playlist flat-single-json: failed to parse root JSON');
+    return [];
   }
-
-  return tracks.length;
 }
 
-async function importFlatSingle(
+/** Full metadata (heavy) for a playlist item range. */
+async function fetchFullPlaylistRange(
   url: string,
-  requestedBy: string,
-  limit: number,
-  skippedReasons: string[],
-  callbacks: PlaylistImportCallbacks,
-): Promise<number> {
-  callbacks.onStrategy('flat');
-  const entries = await fetchFlatPlaylistArgs(url, undefined, limit);
-  logger.info(`Playlist flat fetch: ${String(entries.length)} entries (limit=${String(limit)})`);
-  return deliverChunk(entries, requestedBy, 1, skippedReasons, callbacks);
-}
+  rangeStart: number,
+  rangeEnd: number,
+): Promise<YtDlpEntry[]> {
+  const args = [
+    '--dump-json',
+    '--no-warnings',
+    '--ignore-errors',
+    '--playlist-items',
+    `${String(rangeStart)}:${String(rangeEnd)}`,
+    ...YTDLP_NETWORK_ARGS,
+    url,
+  ];
 
-async function importChunkedFlat(
-  url: string,
-  requestedBy: string,
-  limit: number,
-  skippedReasons: string[],
-  callbacks: PlaylistImportCallbacks,
-): Promise<number> {
-  callbacks.onStrategy('chunked-flat');
-
-  let totalDelivered = 0;
-  let chunkStart = 1;
-
-  while (chunkStart <= limit) {
-    if (callbacks.getRemainingSlots() <= 0) {
-      break;
-    }
-
-    const chunkEnd = Math.min(chunkStart + PLAYLIST_CHUNK_SIZE - 1, limit);
-    const entries = await fetchFlatPlaylistArgs(
-      url,
-      `${String(chunkStart)}:${String(chunkEnd)}`,
-      chunkEnd - chunkStart + 1,
-    );
-
-    if (entries.length === 0) {
-      break;
-    }
-
-    const delivered = await deliverChunk(
-      entries,
-      requestedBy,
-      chunkStart,
-      skippedReasons,
-      callbacks,
-    );
-    totalDelivered += delivered;
-
-    if (entries.length < chunkEnd - chunkStart + 1) {
-      break;
-    }
-
-    chunkStart += PLAYLIST_CHUNK_SIZE;
-  }
-
-  return totalDelivered;
+  return runYtDlpEntries(args);
 }
 
 function getFullSkipReason(entry: YtDlpEntry): string | null {
@@ -286,57 +268,262 @@ function entryToFullTrack(entry: YtDlpEntry, requestedBy: string): Track | null 
   };
 }
 
-async function importFullFallback(
+function entriesToTracksFull(
+  entries: YtDlpEntry[],
+  requestedBy: string,
+  skippedReasons: string[],
+): Track[] {
+  const tracks: Track[] = [];
+  for (const entry of entries) {
+    const skipReason = getFullSkipReason(entry);
+    if (skipReason) {
+      skippedReasons.push(skipReason);
+      continue;
+    }
+    const track = entryToFullTrack(entry, requestedBy);
+    if (!track) {
+      skippedReasons.push(`追加できない動画をスキップしました: ${entry.title ?? '不明'}`);
+      continue;
+    }
+    tracks.push(track);
+  }
+  return tracks;
+}
+
+async function deliverChunk(
+  entries: YtDlpEntry[],
+  requestedBy: string,
+  chunkStart: number,
+  skippedReasons: string[],
+  callbacks: PlaylistImportCallbacks,
+  useFullMetadata: boolean,
+): Promise<number> {
+  if (entries.length === 0) {
+    return 0;
+  }
+
+  const chunkEnd = chunkStart + entries.length - 1;
+  logger.info(
+    `Playlist chunk fetched: start=${String(chunkStart)} end=${String(chunkEnd)} count=${String(entries.length)}`,
+  );
+
+  const tracks = useFullMetadata
+    ? entriesToTracksFull(entries, requestedBy, skippedReasons)
+    : entriesToTracks(entries, requestedBy, skippedReasons);
+
+  if (tracks.length > 0) {
+    await callbacks.onChunk(tracks, {
+      start: chunkStart,
+      end: chunkEnd,
+      count: tracks.length,
+    });
+  }
+
+  return tracks.length;
+}
+
+async function deliverEntriesInSubChunks(
+  entries: YtDlpEntry[],
+  requestedBy: string,
+  skippedReasons: string[],
+  callbacks: PlaylistImportCallbacks,
+  useFullMetadata: boolean,
+): Promise<number> {
+  let total = 0;
+  for (let offset = 0; offset < entries.length; offset += PLAYLIST_CHUNK_SIZE) {
+    if (callbacks.getRemainingSlots() <= 0) {
+      logger.info(
+        `Playlist import stopped: queue full at offset=${String(offset)} remainingSlots=0`,
+      );
+      break;
+    }
+
+    const slice = entries.slice(offset, offset + PLAYLIST_CHUNK_SIZE);
+    const chunkStart = offset + 1;
+    total += await deliverChunk(
+      slice,
+      requestedBy,
+      chunkStart,
+      skippedReasons,
+      callbacks,
+      useFullMetadata,
+    );
+  }
+  return total;
+}
+
+async function importFlatSingle(
   url: string,
   requestedBy: string,
   limit: number,
   skippedReasons: string[],
   callbacks: PlaylistImportCallbacks,
 ): Promise<number> {
-  callbacks.onStrategy('full-fallback');
+  logStrategy('flat', callbacks);
+  logger.info(`Playlist chunk fetch start: start=1 end=${String(limit)}`);
+  const entries = await fetchFlatPlaylistLines(url, { playlistEnd: limit });
+  logger.info(`Playlist flat fetch: ${String(entries.length)} entries (limit=${String(limit)})`);
+  return deliverChunk(entries, requestedBy, 1, skippedReasons, callbacks, false);
+}
 
-  const args = [
-    '--dump-json',
-    '--no-warnings',
-    '--ignore-errors',
-    '--playlist-end',
-    String(limit),
-    ...YTDLP_NETWORK_ARGS,
-    url,
-  ];
+async function importFlatSingleJson(
+  url: string,
+  requestedBy: string,
+  limit: number,
+  skippedReasons: string[],
+  callbacks: PlaylistImportCallbacks,
+): Promise<number> {
+  logStrategy('flat-single-json', callbacks);
+  logger.info(`Playlist flat-single-json fetch start: limit=${String(limit)}`);
+  const entries = await fetchFlatPlaylistSingleJson(url, limit);
+  logger.info(
+    `Playlist flat-single-json fetched: count=${String(entries.length)} limit=${String(limit)}`,
+  );
+  return deliverEntriesInSubChunks(entries, requestedBy, skippedReasons, callbacks, false);
+}
 
-  const lines = await runYtDlp(args);
-  logger.info(`Playlist full fallback: ${String(lines.length)} entries (limit=${String(limit)})`);
+interface ChunkedFlatResult {
+  totalDelivered: number;
+  lastChunkRawCount: number;
+  stoppedAt: number;
+}
 
-  const tracks: Track[] = [];
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line) as YtDlpEntry;
-      const skipReason = getFullSkipReason(entry);
-      if (skipReason) {
-        skippedReasons.push(skipReason);
-        continue;
-      }
-      const track = entryToFullTrack(entry, requestedBy);
-      if (!track) {
-        skippedReasons.push(`追加できない動画をスキップしました: ${entry.title ?? '不明'}`);
-        continue;
-      }
-      tracks.push(track);
-    } catch {
-      skippedReasons.push('JSONの解析に失敗したエントリをスキップしました');
+async function importChunkedFlat(
+  url: string,
+  requestedBy: string,
+  limit: number,
+  skippedReasons: string[],
+  callbacks: PlaylistImportCallbacks,
+): Promise<ChunkedFlatResult> {
+  logStrategy('chunked-flat', callbacks);
+
+  let totalDelivered = 0;
+  let chunkStart = 1;
+  let lastChunkRawCount = 0;
+
+  while (chunkStart <= limit) {
+    const remainingSlots = callbacks.getRemainingSlots();
+    if (remainingSlots <= 0) {
+      logger.info(
+        `Playlist import stopped: queue full before chunk start=${String(chunkStart)}`,
+      );
+      break;
     }
-  }
 
-  if (tracks.length > 0) {
-    await callbacks.onChunk(tracks, {
-      start: 1,
-      end: tracks.length,
-      count: tracks.length,
+    const chunkEnd = Math.min(chunkStart + PLAYLIST_CHUNK_SIZE - 1, limit);
+    logger.info(
+      `Playlist chunk fetch start: start=${String(chunkStart)} end=${String(chunkEnd)} remainingSlots=${String(remainingSlots)}`,
+    );
+
+    const entries = await fetchFlatPlaylistLines(url, {
+      playlistItems: `${String(chunkStart)}:${String(chunkEnd)}`,
     });
+
+    lastChunkRawCount = entries.length;
+
+    if (entries.length === 0) {
+      logger.warn(
+        `Playlist chunk empty: start=${String(chunkStart)} end=${String(chunkEnd)} — stopping chunked-flat`,
+      );
+      break;
+    }
+
+    const delivered = await deliverChunk(
+      entries,
+      requestedBy,
+      chunkStart,
+      skippedReasons,
+      callbacks,
+      false,
+    );
+    totalDelivered += delivered;
+
+    if (entries.length < chunkEnd - chunkStart + 1) {
+      logger.info(
+        `Playlist chunked-flat end of playlist at index=${String(chunkStart + entries.length - 1)}`,
+      );
+      break;
+    }
+
+    chunkStart += PLAYLIST_CHUNK_SIZE;
   }
 
-  return tracks.length;
+  return { totalDelivered, lastChunkRawCount, stoppedAt: chunkStart };
+}
+
+async function importFullFallback(
+  url: string,
+  requestedBy: string,
+  limit: number,
+  skippedReasons: string[],
+  callbacks: PlaylistImportCallbacks,
+  rangeStart = 1,
+): Promise<number> {
+  logStrategy('full-fallback', callbacks);
+
+  const rangeEnd = limit;
+  logger.info(
+    `Playlist full-fallback fetch start: start=${String(rangeStart)} end=${String(rangeEnd)}`,
+  );
+
+  let entries: YtDlpEntry[];
+  if (rangeStart > 1) {
+    entries = await fetchFullPlaylistRange(url, rangeStart, rangeEnd);
+  } else {
+    const args = [
+      '--dump-json',
+      '--no-warnings',
+      '--ignore-errors',
+      '--playlist-end',
+      String(limit),
+      ...YTDLP_NETWORK_ARGS,
+      url,
+    ];
+    entries = await runYtDlpEntries(args);
+  }
+
+  logger.info(
+    `Playlist full-fallback fetched: count=${String(entries.length)} start=${String(rangeStart)} end=${String(rangeEnd)}`,
+  );
+
+  if (entries.length === 0) {
+    return 0;
+  }
+
+  return deliverEntriesInSubChunks(
+    entries,
+    requestedBy,
+    skippedReasons,
+    callbacks,
+    true,
+  );
+}
+
+function shouldTryFullFallback(
+  totalFetched: number,
+  limit: number,
+  stoppedEarly: boolean,
+): boolean {
+  if (totalFetched === 0) {
+    return true;
+  }
+
+  if (!stoppedEarly) {
+    return false;
+  }
+
+  if (limit <= FLAT_PLAYLIST_SUSPICIOUS_CAP) {
+    return false;
+  }
+
+  if (totalFetched <= FLAT_PLAYLIST_SUSPICIOUS_CAP) {
+    logger.warn(
+      `Playlist lightweight fetch suspicious cap: fetched=${String(totalFetched)} limit=${String(limit)}`,
+    );
+    return true;
+  }
+
+  return false;
 }
 
 export async function importPlaylist(
@@ -350,30 +537,115 @@ export async function importPlaylist(
   let strategy: PlaylistFetchStrategy = 'flat';
   let totalFetched = 0;
 
+  logger.info(
+    `Playlist import start: build=${getBuildLabel()} limit=${String(limit)} maxQueue=${String(MAX_QUEUE_SIZE)} remainingSlots=${String(callbacks.getRemainingSlots())}`,
+  );
+
   try {
     if (limit <= FLAT_SINGLE_MAX) {
+      strategy = 'flat';
       totalFetched = await importFlatSingle(url, requestedBy, limit, skippedReasons, callbacks);
       if (totalFetched === 0) {
         strategy = 'chunked-flat';
-        totalFetched = await importChunkedFlat(url, requestedBy, limit, skippedReasons, callbacks);
+        const chunked = await importChunkedFlat(url, requestedBy, limit, skippedReasons, callbacks);
+        totalFetched = chunked.totalDelivered;
       }
     } else {
-      strategy = 'chunked-flat';
-      totalFetched = await importChunkedFlat(url, requestedBy, limit, skippedReasons, callbacks);
+      strategy = 'flat-single-json';
+      totalFetched = await importFlatSingleJson(url, requestedBy, limit, skippedReasons, callbacks);
+
+      let stoppedEarly = totalFetched > 0 && totalFetched < limit && totalFetched <= FLAT_PLAYLIST_SUSPICIOUS_CAP;
+
+      if (shouldTryFullFallback(totalFetched, limit, stoppedEarly || totalFetched === 0)) {
+        if (totalFetched === 0) {
+          strategy = 'chunked-flat';
+          const chunked = await importChunkedFlat(
+            url,
+            requestedBy,
+            limit,
+            skippedReasons,
+            callbacks,
+          );
+          totalFetched = chunked.totalDelivered;
+          stoppedEarly =
+            chunked.totalDelivered > 0
+            && chunked.totalDelivered < limit
+            && (chunked.lastChunkRawCount === 0 || chunked.totalDelivered <= FLAT_PLAYLIST_SUSPICIOUS_CAP);
+        }
+
+        if (shouldTryFullFallback(totalFetched, limit, stoppedEarly)) {
+          const resumeFrom = totalFetched > 0 ? totalFetched + 1 : 1;
+          logger.warn(
+            `Playlist switching to full-fallback: resumeFrom=${String(resumeFrom)} alreadyFetched=${String(totalFetched)} limit=${String(limit)}`,
+          );
+          strategy = 'full-fallback';
+          const fallbackAdded = await importFullFallback(
+            url,
+            requestedBy,
+            limit,
+            skippedReasons,
+            callbacks,
+            resumeFrom,
+          );
+          totalFetched += fallbackAdded;
+        }
+      } else if (totalFetched === 0) {
+        strategy = 'chunked-flat';
+        const chunked = await importChunkedFlat(url, requestedBy, limit, skippedReasons, callbacks);
+        totalFetched = chunked.totalDelivered;
+
+        if (shouldTryFullFallback(
+          chunked.totalDelivered,
+          limit,
+          chunked.totalDelivered < limit && chunked.lastChunkRawCount === 0,
+        )) {
+          const resumeFrom = chunked.totalDelivered > 0 ? chunked.totalDelivered + 1 : 1;
+          strategy = 'full-fallback';
+          totalFetched += await importFullFallback(
+            url,
+            requestedBy,
+            limit,
+            skippedReasons,
+            callbacks,
+            resumeFrom,
+          );
+        }
+      }
     }
 
     if (totalFetched === 0) {
       strategy = 'full-fallback';
-      totalFetched = await importFullFallback(url, requestedBy, limit, skippedReasons, callbacks);
+      totalFetched = await importFullFallback(
+        url,
+        requestedBy,
+        limit,
+        skippedReasons,
+        callbacks,
+        1,
+      );
     }
   } catch (error) {
+    logger.warn(
+      `Playlist import error (${strategy}): ${error instanceof Error ? error.message : String(error)}`,
+    );
     if (totalFetched === 0) {
       strategy = 'full-fallback';
-      totalFetched = await importFullFallback(url, requestedBy, limit, skippedReasons, callbacks);
+      totalFetched = await importFullFallback(
+        url,
+        requestedBy,
+        limit,
+        skippedReasons,
+        callbacks,
+        1,
+      );
     } else {
       throw error;
     }
   }
+
+  logger.info(
+    `Playlist import complete: added=${String(totalFetched)} skipped=${String(skippedReasons.length)} strategy=${strategy}`,
+  );
 
   return {
     strategy,
@@ -392,8 +664,8 @@ export async function fetchPlaylistTracksLightweight(
   const tracks: Track[] = [];
 
   const result = await importPlaylist(url, requestedBy, maxTracks, {
-    onStrategy: (strategy) => {
-      logger.info(`Playlist fetch strategy: ${strategy}`);
+    onStrategy: () => {
+      // strategy logged inside importPlaylist
     },
     getRemainingSlots: () => Math.max(0, maxTracks - tracks.length),
     onChunk: async (chunkTracks) => {
