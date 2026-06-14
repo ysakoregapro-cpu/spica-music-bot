@@ -3,8 +3,11 @@ import {
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import type { MusicManager } from '../music/MusicManager.js';
+import {
+  buildListReplyOptions,
+  registerListReplyMessage,
+} from './listPagination.js';
 import { isQueueListError } from '../music/types.js';
-import { formatQueueList } from '../utils/format.js';
 import { replyEphemeral } from '../utils/interaction.js';
 
 export const data = new SlashCommandBuilder()
@@ -34,14 +37,23 @@ export async function execute(
   }
 
   const page = interaction.options.getInteger('page') ?? 1;
-  const result = player.queue.getListView(page);
+  const options = buildListReplyOptions(interaction.guildId, page, musicManager);
 
-  if (isQueueListError(result)) {
-    await replyEphemeral(interaction, result.error);
+  if ('error' in options) {
+    await replyEphemeral(interaction, options.error);
     return;
   }
 
-  await interaction.reply({
-    content: formatQueueList(result),
+  const view = player.queue.getListView(page);
+  if (isQueueListError(view)) {
+    await replyEphemeral(interaction, view.error);
+    return;
+  }
+
+  const reply = await interaction.reply({
+    ...options,
+    fetchReply: true,
   });
+
+  registerListReplyMessage(reply.id, interaction.user.id, interaction.guildId, view.page);
 }

@@ -8,10 +8,12 @@ import {
   type RepeatMode,
   type Track,
 } from './types.js';
+import { logger } from '../utils/logger.js';
 
 export class TrackQueue {
   private upcoming: Track[] = [];
-  private sessionTracks: Track[] = [];
+  /** All tracks in the current playback session (repeat pool). */
+  private repeatPool: Track[] = [];
   private _current: Track | null = null;
   private _repeatMode: RepeatMode = 'off';
 
@@ -32,8 +34,8 @@ export class TrackQueue {
       return this.upcoming[0]!;
     }
 
-    if (this._repeatMode === 'list' && this.sessionTracks.length > 0) {
-      return this.sessionTracks[0]!;
+    if (this._repeatMode === 'list' && this.repeatPool.length > 0) {
+      return this.buildFullSessionPool()[0] ?? null;
     }
 
     // Shuffle repeat order is decided only when the queue wraps.
@@ -47,14 +49,14 @@ export class TrackQueue {
 
   clear(): void {
     this.upcoming = [];
-    this.sessionTracks = [];
+    this.repeatPool = [];
     this._current = null;
     this._repeatMode = 'off';
   }
 
-  private registerSessionTracks(tracks: Track[]): void {
+  private registerRepeatPoolTracks(tracks: Track[]): void {
     for (const track of tracks) {
-      this.sessionTracks.push(track);
+      this.repeatPool.push(track);
     }
   }
 
@@ -66,10 +68,40 @@ export class TrackQueue {
   }
 
   private refillUpcomingFromSession(shuffle: boolean): void {
-    this.upcoming = [...this.sessionTracks];
-    if (shuffle) {
-      this.shuffleArrayInPlace(this.upcoming);
+    const pool = this.buildFullSessionPool();
+    if (pool.length === 0) {
+      return;
     }
+
+    if (shuffle) {
+      logger.info(
+        `Shuffle repeat: rebuilding next cycle from full queue pool count=${String(pool.length)}`,
+      );
+      this.shuffleArrayInPlace(pool);
+      logger.info(`Shuffle repeat: next cycle shuffled count=${String(pool.length)}`);
+    }
+
+    this.upcoming = pool;
+  }
+
+  /** Session-wide repeat pool: enqueued tracks plus any in-flight queue state. */
+  private buildFullSessionPool(): Track[] {
+    const pool: Track[] = [...this.repeatPool];
+    const urls = new Set(pool.map((track) => track.url));
+
+    if (this._current && !urls.has(this._current.url)) {
+      pool.push(this._current);
+      urls.add(this._current.url);
+    }
+
+    for (const track of this.upcoming) {
+      if (!urls.has(track.url)) {
+        pool.push(track);
+        urls.add(track.url);
+      }
+    }
+
+    return pool;
   }
 
   private trimToQueueLimit(tracks: Track[]): { accepted: Track[]; dropped: number } {
@@ -100,7 +132,7 @@ export class TrackQueue {
   enqueue(tracks: Track[]): QueueAddResult {
     const { accepted, dropped } = this.trimToQueueLimit(tracks);
     this.upcoming.push(...accepted);
-    this.registerSessionTracks(accepted);
+    this.registerRepeatPoolTracks(accepted);
 
     return {
       added: accepted.length,
@@ -112,7 +144,7 @@ export class TrackQueue {
   insertNext(tracks: Track[]): QueueAddResult {
     const { accepted, dropped } = this.trimToQueueLimit(tracks);
     this.upcoming.unshift(...accepted);
-    this.registerSessionTracks(accepted);
+    this.registerRepeatPoolTracks(accepted);
 
     return {
       added: accepted.length,
@@ -150,14 +182,14 @@ export class TrackQueue {
       return next;
     }
 
-    if (this._repeatMode === 'list' && this.sessionTracks.length > 0) {
+    if (this._repeatMode === 'list' && this.repeatPool.length > 0) {
       this.refillUpcomingFromSession(false);
       const next = this.upcoming.shift()!;
       this._current = next;
       return next;
     }
 
-    if (this._repeatMode === 'shuffle' && this.sessionTracks.length > 0) {
+    if (this._repeatMode === 'shuffle' && this.repeatPool.length > 0) {
       this.refillUpcomingFromSession(true);
       const next = this.upcoming.shift()!;
       this._current = next;
