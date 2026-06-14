@@ -35,7 +35,7 @@ export class TrackQueue {
     }
 
     if (this._repeatMode === 'list' && this.repeatPool.length > 0) {
-      return this.buildFullSessionPool()[0] ?? null;
+      return this.repeatPool[0] ?? null;
     }
 
     // Shuffle repeat order is decided only when the queue wraps.
@@ -84,24 +84,9 @@ export class TrackQueue {
     this.upcoming = pool;
   }
 
-  /** Session-wide repeat pool: enqueued tracks plus any in-flight queue state. */
+  /** Full session repeat pool — queue order and duplicate entries preserved. */
   private buildFullSessionPool(): Track[] {
-    const pool: Track[] = [...this.repeatPool];
-    const urls = new Set(pool.map((track) => track.url));
-
-    if (this._current && !urls.has(this._current.url)) {
-      pool.push(this._current);
-      urls.add(this._current.url);
-    }
-
-    for (const track of this.upcoming) {
-      if (!urls.has(track.url)) {
-        pool.push(track);
-        urls.add(track.url);
-      }
-    }
-
-    return pool;
+    return [...this.repeatPool];
   }
 
   private trimToQueueLimit(tracks: Track[]): { accepted: Track[]; dropped: number } {
