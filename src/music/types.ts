@@ -11,7 +11,8 @@ export type RepeatMode = 'off' | 'one' | 'list' | 'shuffle';
 export interface Track {
   title: string;
   url: string;
-  duration: number;
+  /** Null when not resolved at playlist import time; shown as --:-- in /list. */
+  duration: number | null;
   requestedBy: string;
 }
 

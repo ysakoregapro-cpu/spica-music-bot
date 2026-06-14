@@ -11,7 +11,7 @@ import { isPlaylistUrl } from '../utils/validators.js';
 import { isPremiumOnlyMessage, UnplayableTrackError } from './playbackErrors.js';
 import {
   isYoutubeAccessError,
-  mapYtDlpProcessError,
+  runYtDlp,
   sanitizeYtDlpLogText,
   spawnYtDlpProcess,
   throwIfYoutubeAccessError,
@@ -183,59 +183,6 @@ function entryToTrack(entry: YtDlpEntry, requestedBy: string): Track | null {
     duration: entry.duration,
     requestedBy,
   };
-}
-
-async function runYtDlp(args: readonly string[]): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    let process: ChildProcess;
-    try {
-      process = spawnYtDlpProcess(args);
-    } catch (error) {
-      reject(error);
-      return;
-    }
-
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-
-    process.stdout?.on('data', (chunk: Buffer) => {
-      stdoutChunks.push(chunk);
-    });
-
-    process.stderr?.on('data', (chunk: Buffer) => {
-      stderrChunks.push(chunk);
-    });
-
-    process.on('error', (error) => {
-      reject(error);
-    });
-
-    process.on('close', (code) => {
-      const stdout = Buffer.concat(stdoutChunks).toString('utf8');
-      const stderr = Buffer.concat(stderrChunks).toString('utf8');
-
-      if (code !== 0 && stdout.trim().length === 0) {
-        reject(mapYtDlpProcessError(stderr, `yt-dlp exited with code ${String(code)}`));
-        return;
-      }
-
-      if (stderr.trim()) {
-        const safeStderr = sanitizeYtDlpLogText(stderr.trim());
-        if (isYoutubeAccessError(safeStderr)) {
-          logger.warn(`yt-dlp YouTube access error: ${formatYoutubeAccessLog(safeStderr)}`);
-        } else {
-          logger.debug(`yt-dlp stderr: ${safeStderr}`);
-        }
-      }
-
-      resolve(
-        stdout
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0),
-      );
-    });
-  });
 }
 
 function formatYoutubeAccessLog(text: string): string {
@@ -475,30 +422,12 @@ export async function prepareAudioStream(
   }
 }
 
-export async function fetchTracks(
+export async function fetchSingleTrack(
   url: string,
   requestedBy: string,
-  maxTracks: number = MAX_PLAYLIST_TRACKS,
 ): Promise<FetchResult> {
-  const playlist = isPlaylistUrl(url);
-  const playlistEnd = Math.min(MAX_PLAYLIST_TRACKS, Math.max(1, maxTracks));
-
-  const args = playlist
-    ? [
-        '--dump-json',
-        '--no-warnings',
-        '--ignore-errors',
-        '--playlist-end',
-        String(playlistEnd),
-        ...YTDLP_NETWORK_ARGS,
-        url,
-      ]
-    : ['--dump-json', '--no-warnings', '--no-playlist', ...YTDLP_NETWORK_ARGS, url];
-
+  const args = ['--dump-json', '--no-warnings', '--no-playlist', ...YTDLP_NETWORK_ARGS, url];
   const lines = await runYtDlp(args);
-  if (playlist) {
-    logger.info(`Playlist fetch: ${String(lines.length)} entries from yt-dlp (limit=${String(playlistEnd)})`);
-  }
   const tracks: Track[] = [];
   const skippedReasons: string[] = [];
 
@@ -509,32 +438,6 @@ export async function fetchTracks(
     } catch {
       skippedReasons.push('JSONの解析に失敗したエントリをスキップしました');
       continue;
-    }
-
-    if (playlist && (entry.duration == null || entry.duration <= 0)) {
-      const detailUrl = buildVideoUrl(entry);
-      if (!detailUrl) {
-        skippedReasons.push('URLを取得できない動画をスキップしました');
-        continue;
-      }
-
-      try {
-        const detailLines = await runYtDlp([
-          '--dump-json',
-          '--no-warnings',
-          '--no-playlist',
-          ...YTDLP_NETWORK_ARGS,
-          detailUrl,
-        ]);
-        if (detailLines.length === 0) {
-          skippedReasons.push(`詳細情報を取得できませんでした: ${entry.title ?? detailUrl}`);
-          continue;
-        }
-        entry = JSON.parse(detailLines[0]!) as YtDlpEntry;
-      } catch {
-        skippedReasons.push(`取得できない動画をスキップしました: ${entry.title ?? detailUrl}`);
-        continue;
-      }
     }
 
     const skipReason = getSkipReason(entry);
@@ -557,4 +460,17 @@ export async function fetchTracks(
     skipped: skippedReasons.length,
     skippedReasons,
   };
+}
+
+export async function fetchTracks(
+  url: string,
+  requestedBy: string,
+  maxTracks: number = MAX_PLAYLIST_TRACKS,
+): Promise<FetchResult> {
+  if (!isPlaylistUrl(url)) {
+    return fetchSingleTrack(url, requestedBy);
+  }
+
+  const { fetchPlaylistTracksLightweight } = await import('./playlistImport.js');
+  return fetchPlaylistTracksLightweight(url, requestedBy, maxTracks);
 }

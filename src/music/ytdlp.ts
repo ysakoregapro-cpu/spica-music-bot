@@ -161,3 +161,77 @@ export function isYtDlpYouTubeAccessFailure(error: unknown): boolean {
   const detail = error instanceof Error ? error.message : String(error);
   return isYoutubeAccessError(detail);
 }
+
+function formatYoutubeAccessLog(text: string): string {
+  const lower = text.toLowerCase();
+  if (lower.includes('sign in to confirm')) {
+    return 'bot confirmation required';
+  }
+  if (lower.includes('signature solving failed')) {
+    return 'signature solving failed';
+  }
+  if (lower.includes('n challenge solving failed')) {
+    return 'n challenge solving failed';
+  }
+  if (lower.includes('only images are available for download')) {
+    return 'only images available';
+  }
+  if (lower.includes('requested format is not available')) {
+    return 'requested format not available';
+  }
+  return 'YouTube access error';
+}
+
+/** Run yt-dlp and collect stdout lines (metadata / playlist import). */
+export async function runYtDlp(args: readonly string[]): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    let process: ChildProcess;
+    try {
+      process = spawnYtDlpProcess(args);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+
+    process.stdout?.on('data', (chunk: Buffer) => {
+      stdoutChunks.push(chunk);
+    });
+
+    process.stderr?.on('data', (chunk: Buffer) => {
+      stderrChunks.push(chunk);
+    });
+
+    process.on('error', (error) => {
+      reject(error);
+    });
+
+    process.on('close', (code) => {
+      const stdout = Buffer.concat(stdoutChunks).toString('utf8');
+      const stderr = Buffer.concat(stderrChunks).toString('utf8');
+
+      if (code !== 0 && stdout.trim().length === 0) {
+        reject(mapYtDlpProcessError(stderr, `yt-dlp exited with code ${String(code)}`));
+        return;
+      }
+
+      if (stderr.trim()) {
+        const safeStderr = sanitizeYtDlpLogText(stderr.trim());
+        if (isYoutubeAccessError(safeStderr)) {
+          logger.warn(`yt-dlp YouTube access error: ${formatYoutubeAccessLog(safeStderr)}`);
+        } else {
+          logger.debug(`yt-dlp stderr: ${safeStderr}`);
+        }
+      }
+
+      resolve(
+        stdout
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0),
+      );
+    });
+  });
+}

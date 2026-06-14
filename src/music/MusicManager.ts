@@ -1,5 +1,6 @@
 import type { ChatInputCommandInteraction, GuildMember, VoiceBasedChannel } from 'discord.js';
 import { GuildPlayer } from './GuildPlayer.js';
+import { PlayJobQueue } from './PlayJobQueue.js';
 import type { FetchResult } from './types.js';
 import { MAX_QUEUE_SIZE } from './types.js';
 import { fetchTracks } from './youtube.js';
@@ -78,6 +79,16 @@ export async function resolveYouTubeTracks(
 
 export class MusicManager {
   private readonly players = new Map<string, GuildPlayer>();
+  private readonly playJobQueue = new PlayJobQueue();
+
+  enqueuePlayJob(params: {
+    guildId: string;
+    interaction: ChatInputCommandInteraction;
+    url: string;
+    player: GuildPlayer;
+  }): void {
+    this.playJobQueue.enqueue(params);
+  }
 
   get(guildId: string): GuildPlayer | undefined {
     return this.players.get(guildId);

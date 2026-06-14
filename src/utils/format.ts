@@ -19,6 +19,13 @@ export function formatDuration(seconds: number): string {
   return `${minutes}:${String(secs).padStart(2, '0')}`;
 }
 
+export function formatTrackDuration(seconds: number | null): string {
+  if (seconds == null || seconds <= 0) {
+    return '--:--';
+  }
+  return formatDuration(seconds);
+}
+
 export function formatRepeatMode(mode: RepeatMode): string {
   switch (mode) {
     case 'off':
@@ -34,7 +41,7 @@ export function formatRepeatMode(mode: RepeatMode): string {
 
 function formatTrackLine(index: number | null, track: Track, prefix: string): string {
   const number = index === null ? '▶' : String(index);
-  return `${prefix}${number}. **${track.title}** (${formatDuration(track.duration)})`;
+  return `${prefix}${number}. **${track.title}** (${formatTrackDuration(track.duration)})`;
 }
 
 export function formatQueueList(view: QueueListView): string {
@@ -66,6 +73,30 @@ export function formatQueueList(view: QueueListView): string {
 
   lines.push('');
   lines.push(`リピート: ${formatRepeatMode(view.repeatMode)}`);
+
+  return lines.join('\n');
+}
+
+export function formatPlayJobComplete(result: {
+  added: number;
+  skipped: number;
+  queueFull: number;
+}): string {
+  const lines: string[] = [];
+
+  if (result.added > 0) {
+    lines.push(`${result.added}曲をキューに追加しました。`);
+  }
+
+  if (result.skipped > 0) {
+    lines.push(`${result.skipped}曲をスキップしました。`);
+  }
+
+  if (result.queueFull > 0) {
+    lines.push(
+      `キュー上限(${MAX_QUEUE_SIZE}曲)のため${result.queueFull}曲を追加できませんでした。`,
+    );
+  }
 
   return lines.join('\n');
 }

@@ -3,8 +3,7 @@ import {
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import type { MusicManager } from '../music/MusicManager.js';
-import { ensurePlayerReady, resolveYouTubeTracks } from '../music/MusicManager.js';
-import { formatAddResult } from '../utils/format.js';
+import { ensurePlayerReady } from '../music/MusicManager.js';
 
 export const data = new SlashCommandBuilder()
   .setName('play')
@@ -29,46 +28,10 @@ export async function execute(
   }
 
   const player = musicManager.getOrCreate(ready.guildId);
-  const maxTracks = player.queue.availableEnqueueCount();
-  const fetchResult = await resolveYouTubeTracks(interaction, url, maxTracks);
-  if (!fetchResult) {
-    return;
-  }
-
-  const previousNextUrl = player.queue.peekNext()?.url;
-  const addResult = player.queue.enqueue(fetchResult.tracks);
-  const wasIdle = !player.isPlaying && player.queue.current === null;
-
-  if (!wasIdle) {
-    const newNextUrl = player.queue.peekNext()?.url;
-    if (previousNextUrl !== newNextUrl) {
-      player.notifyQueueChanged('play');
-    } else {
-      player.refreshPrefetch();
-    }
-  }
-
-  if (wasIdle) {
-    const next = player.queue.takeNextTrack();
-    if (next) {
-      player.attachInteractionStatus(interaction);
-      try {
-        await player.start(next);
-      } catch {
-        await interaction.editReply({
-          content: '再生を開始できませんでした。',
-        });
-        return;
-      }
-    }
-  }
-
-  const firstTrack = fetchResult.tracks[0]!;
-  const prefix = wasIdle
-    ? `▶ **${firstTrack.title}** を再生開始しました。`
-    : `**${firstTrack.title}** をキューに追加しました。`;
-
-  await interaction.editReply({
-    content: `${prefix}\n${formatAddResult(addResult, fetchResult)}`,
+  musicManager.enqueuePlayJob({
+    guildId: ready.guildId,
+    interaction,
+    url,
+    player,
   });
 }
