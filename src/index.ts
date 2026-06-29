@@ -21,6 +21,7 @@ import * as skip from './commands/skip.js';
 import * as skipto from './commands/skipto.js';
 import * as stop from './commands/stop.js';
 import { musicManager } from './music/MusicManager.js';
+import { autoLeaveManager } from './music/AutoLeaveManager.js';
 import { getBuildLabel } from './utils/buildInfo.js';
 import { safeErrorReply } from './utils/interaction.js';
 import { logger } from './utils/logger.js';
@@ -54,12 +55,20 @@ const client = new Client({
 });
 
 client.once(Events.ClientReady, (readyClient) => {
+  musicManager.setClient(readyClient);
   logger.info(`Logged in as ${readyClient.user.tag}`);
   logger.info(`Spica MusicBot build: ${getBuildLabel()} (startup)`);
 });
 
 client.on('error', (error) => {
   logger.error('Discord client error', error);
+});
+
+client.on(Events.VoiceStateUpdate, (oldState, newState) => {
+  if (!client.user) {
+    return;
+  }
+  autoLeaveManager.handleVoiceStateUpdate(oldState, newState, client, musicManager);
 });
 
 client.on(Events.InteractionCreate, async (interaction: Interaction) => {

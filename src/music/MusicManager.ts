@@ -1,6 +1,7 @@
-import type { ChatInputCommandInteraction, GuildMember, VoiceBasedChannel } from 'discord.js';
+import type { ChatInputCommandInteraction, Client, GuildMember, VoiceBasedChannel } from 'discord.js';
 import { GuildPlayer } from './GuildPlayer.js';
 import { PlayJobQueue } from './PlayJobQueue.js';
+import { autoLeaveManager } from './AutoLeaveManager.js';
 import type { FetchResult } from './types.js';
 import { MAX_QUEUE_SIZE } from './types.js';
 import { fetchTracks } from './youtube.js';
@@ -80,6 +81,26 @@ export async function resolveYouTubeTracks(
 export class MusicManager {
   private readonly players = new Map<string, GuildPlayer>();
   private readonly playJobQueue = new PlayJobQueue();
+  private client: Client | null = null;
+
+  setClient(client: Client): void {
+    this.client = client;
+  }
+
+  countHumansInPlayerChannel(guildId: string): number | null {
+    const player = this.players.get(guildId);
+    const channelId = player?.getVoiceChannelId();
+    if (!this.client || !channelId) {
+      return null;
+    }
+
+    const channel = this.client.guilds.cache.get(guildId)?.channels.cache.get(channelId);
+    if (!channel?.isVoiceBased()) {
+      return null;
+    }
+
+    return channel.members.filter((member) => !member.user.bot).size;
+  }
 
   enqueuePlayJob(params: {
     guildId: string;
@@ -108,10 +129,14 @@ export class MusicManager {
   async ensureConnected(guildId: string, channel: VoiceBasedChannel): Promise<GuildPlayer> {
     const player = this.getOrCreate(guildId);
     await player.connect(channel);
+    if (this.client) {
+      autoLeaveManager.checkAfterConnect(guildId, channel.id, this.client, this);
+    }
     return player;
   }
 
   remove(guildId: string): void {
+    autoLeaveManager.cancelAutoLeave(guildId);
     const player = this.players.get(guildId);
     if (player) {
       player.destroy();

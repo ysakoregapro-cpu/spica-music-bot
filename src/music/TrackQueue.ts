@@ -16,6 +16,8 @@ export class TrackQueue {
   private repeatPool: Track[] = [];
   private _current: Track | null = null;
   private _repeatMode: RepeatMode = 'off';
+  /** Tracks completed in the current shuffle-repeat cycle. */
+  private playedCountInCycle = 0;
 
   get current(): Track | null {
     return this._current;
@@ -38,12 +40,16 @@ export class TrackQueue {
       return this.repeatPool[0] ?? null;
     }
 
-    // Shuffle repeat order is decided only when the queue wraps.
+    // Shuffle repeat order is decided only when the cycle completes.
     return null;
   }
 
   setRepeatMode(mode: RepeatMode): RepeatMode {
+    const previous = this._repeatMode;
     this._repeatMode = mode;
+    if (previous !== mode && (previous === 'shuffle' || mode === 'shuffle')) {
+      this.playedCountInCycle = 0;
+    }
     return this._repeatMode;
   }
 
@@ -52,6 +58,7 @@ export class TrackQueue {
     this.repeatPool = [];
     this._current = null;
     this._repeatMode = 'off';
+    this.playedCountInCycle = 0;
   }
 
   private registerRepeatPoolTracks(tracks: Track[]): void {
@@ -138,8 +145,9 @@ export class TrackQueue {
     };
   }
 
+  /** Shuffles all waiting tracks (current track is unchanged). */
   shuffle(): boolean {
-    if (this.upcoming.length <= 1) {
+    if (this.upcoming.length < 2) {
       return false;
     }
 
@@ -160,7 +168,53 @@ export class TrackQueue {
     this._current = track;
   }
 
+  /**
+   * Natural track end: move the finished track to the queue tail, then take the next track.
+   * Default (off/list) rotates the queue; shuffle-repeat shuffles only at cycle boundaries.
+   */
+  completeCurrentTrackNaturalEnd(): Track | null {
+    const finished = this._current;
+    if (!finished) {
+      return this.takeNextTrack();
+    }
+
+    if (this._repeatMode === 'shuffle') {
+      this.upcoming.push(finished);
+      this.playedCountInCycle += 1;
+
+      const cycleSize = this.repeatPool.length;
+      logger.info(
+        `Shuffle repeat cycle progress: played=${String(this.playedCountInCycle)} cycleSize=${String(cycleSize)} upcoming=${String(this.upcoming.length)}`,
+      );
+
+      if (cycleSize > 0 && this.playedCountInCycle >= cycleSize) {
+        logger.info(
+          `Shuffle repeat: cycle complete, shuffling waiting queue count=${String(this.upcoming.length)}`,
+        );
+        this.shuffleArrayInPlace(this.upcoming);
+        this.playedCountInCycle = 0;
+      }
+
+      return this.shiftNextFromUpcoming();
+    }
+
+    // Default queue loop (off) and list repeat: rotate finished track to the tail.
+    this.upcoming.push(finished);
+    logger.info(
+      `Queue rotate: moved "${finished.title}" to tail, upcoming=${String(this.upcoming.length)}`,
+    );
+
+    return this.shiftNextFromUpcoming();
+  }
+
+  /**
+   * Skip / skipto / first track: take the next waiting track without rotating the current one.
+   */
   takeNextTrack(): Track | null {
+    return this.shiftNextFromUpcoming();
+  }
+
+  private shiftNextFromUpcoming(): Track | null {
     if (this.upcoming.length > 0) {
       const next = this.upcoming.shift()!;
       this._current = next;
@@ -169,16 +223,21 @@ export class TrackQueue {
 
     if (this._repeatMode === 'list' && this.repeatPool.length > 0) {
       this.refillUpcomingFromSession(false);
-      const next = this.upcoming.shift()!;
-      this._current = next;
-      return next;
+      if (this.upcoming.length > 0) {
+        const next = this.upcoming.shift()!;
+        this._current = next;
+        return next;
+      }
     }
 
     if (this._repeatMode === 'shuffle' && this.repeatPool.length > 0) {
       this.refillUpcomingFromSession(true);
-      const next = this.upcoming.shift()!;
-      this._current = next;
-      return next;
+      this.playedCountInCycle = 0;
+      if (this.upcoming.length > 0) {
+        const next = this.upcoming.shift()!;
+        this._current = next;
+        return next;
+      }
     }
 
     this._current = null;

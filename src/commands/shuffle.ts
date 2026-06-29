@@ -31,6 +31,6 @@ export async function execute(
   }
 
   await interaction.reply({
-    content: 'キューをシャッフルしました。現在再生中の曲はそのままです。',
+    content: 'キューをシャッフルしました。現在再生中の曲以外の待機キュー全体をシャッフルしました。',
   });
 }

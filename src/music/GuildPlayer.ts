@@ -77,7 +77,12 @@ export class GuildPlayer {
       },
     });
 
-    this.player.on('stateChange', (_oldState, newState) => {
+    this.player.on('stateChange', (oldState, newState) => {
+      const trackTitle = this.queue.current?.title ?? 'none';
+      logger.info(
+        `Audio player status change: ${oldState.status} -> ${newState.status} guild=${this.guildId} track="${trackTitle}"`,
+      );
+
       if (newState.status !== AudioPlayerStatus.Idle) {
         return;
       }
@@ -133,6 +138,10 @@ export class GuildPlayer {
 
   get isConnected(): boolean {
     return this.connection !== null;
+  }
+
+  getVoiceChannelId(): string | null {
+    return this.voiceChannelId;
   }
 
   attachInteractionStatus(interaction: ChatInputCommandInteraction): void {
@@ -233,6 +242,10 @@ export class GuildPlayer {
       const maxWait = useInitialBuffer ? BUFFER_MAX_WAIT_INITIAL_MS : BUFFER_MAX_WAIT_SKIP_MS;
       const showCountdown = options.showCountdown ?? false;
 
+      logger.info(
+        `Stream open prep: track="${track.title}" initialBuffer=${String(useInitialBuffer)} targetBytes=${String(bufferTarget)} maxWaitMs=${String(maxWait)}`,
+      );
+
       if (!prefetchValidated && !useInitialBuffer && showCountdown) {
         logger.info(`Prefetch not ready, waiting with normal buffer: ${track.title}`);
       }
@@ -331,6 +344,22 @@ export class GuildPlayer {
   }
 
   async stop(): Promise<void> {
+    this.playbackStoppedByUser = true;
+    this.idleAdvanceBlocked = true;
+    this.blockNaturalEnd = false;
+    this.killCurrentStreamOnly();
+    this.prefetchManager.killAll();
+    this.player.stop(true);
+    this.queue.clear();
+    this.playbackStatus?.clear?.();
+    this.playbackStatus = null;
+    this.lifecycle.onSessionEnd?.(this.guildId);
+    this.lifecycle.onVoiceLeave?.(this.guildId);
+    this.destroy();
+  }
+
+  async autoLeave(): Promise<void> {
+    logger.info(`Auto-leave stop: guild=${this.guildId}`);
     this.playbackStoppedByUser = true;
     this.idleAdvanceBlocked = true;
     this.blockNaturalEnd = false;
@@ -474,14 +503,23 @@ export class GuildPlayer {
     this.idleAdvanceBlocked = true;
     this.blockNaturalEnd = false;
 
-    const next = this.queue.takeNextTrack();
+    const finishedTitle = this.queue.current?.title ?? 'none';
+    const next = reason === 'natural-end'
+      ? this.queue.completeCurrentTrackNaturalEnd()
+      : this.queue.takeNextTrack();
+
     if (!next) {
+      logger.info(`Track transition end: finished="${finishedTitle}" next=none reason=${reason}`);
       this.killCurrentStreamOnly();
       this.prefetchManager.killAll();
       this.idleAdvanceBlocked = false;
       this.lifecycle.onSessionEnd?.(this.guildId);
       return null;
     }
+
+    logger.info(
+      `Track transition: finished="${finishedTitle}" next="${next.title}" reason=${reason} buffer=skip`,
+    );
 
     const prefetchValidated = this.prefetchManager.isValidatedFor(next);
 
@@ -552,7 +590,9 @@ export class GuildPlayer {
     this.currentBytesBuffered = prepared.bytesBuffered;
 
     logger.info(`Playback live stream started: "${track.title}" [${prepared.route}]`);
-    logger.info(`stream source: ${prepared.streamSource}`);
+    logger.info(
+      `stream source: ${prepared.streamSource} bytesBuffered=${String(prepared.bytesBuffered)} inputType=${prepared.inputType}`,
+    );
 
     for (const process of prepared.processes) {
       process.on('close', (code) => {
@@ -571,8 +611,10 @@ export class GuildPlayer {
 
     try {
       await entersState(this.player, AudioPlayerStatus.Playing, 20_000);
+      logger.info(`Audio player entered Playing: "${track.title}"`);
     } catch {
       await entersState(this.player, AudioPlayerStatus.Buffering, 20_000);
+      logger.info(`Audio player entered Buffering: "${track.title}"`);
     }
   }
 
