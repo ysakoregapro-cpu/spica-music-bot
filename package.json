@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "test": "npm run build && node --test tests/*.cjs",
     "dev": "tsx src/index.ts",
     "deploy": "tsx src/deploy-commands.ts",
     "build": "tsc",

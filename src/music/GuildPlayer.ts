@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import type { ChatInputCommandInteraction } from 'discord.js';
+import type { ChatInputCommandInteraction, SendableChannels } from 'discord.js';
 import {
   AudioPlayer,
   AudioPlayerStatus,
@@ -46,6 +46,37 @@ export interface PlayOptions {
 }
 
 export class GuildPlayer {
+  onChange: (() => void) | undefined;
+  onStatusChannel: ((channel: SendableChannels) => void) | undefined;
+  private muted = false;
+  private history: Track[] = [];
+  private lastStarted: Track | null = null;
+
+  get isMuted(): boolean { return this.muted; }
+  get canGoBack(): boolean { return this.history.length > 0; }
+  get isTransitioning(): boolean { return this.idleAdvanceBlocked || this.handlingNaturalEnd; }
+
+  setMuted(value: boolean): void {
+    if (!this.connection || !this.connection.rejoin({ ...this.connection.joinConfig, selfMute: value })) {
+      throw new Error('音声接続を更新できませんでした。');
+    }
+    this.muted = value;
+    this.onChange?.();
+  }
+
+  async previous(): Promise<void> {
+    const track = this.history.at(-1);
+    if (!track) return;
+    this.queue.returnToPrevious(track);
+    this.history.pop();
+    this.lastStarted = track;
+    this.skipRequested = true;
+    this.idleAdvanceBlocked = true;
+    this.killCurrentStreamOnly();
+    this.player.stop(true);
+    this.invalidatePrefetch('previous');
+    await this.play(track);
+  }
   readonly queue = new TrackQueue();
   private connection: VoiceConnection | null = null;
   private readonly player: AudioPlayer;
@@ -148,6 +179,7 @@ export class GuildPlayer {
     const channel = interaction.channel;
     if (channel?.isTextBased()) {
       this.playbackStatus = createChannelPlaybackStatus(channel);
+      if (channel.isSendable()) this.onStatusChannel?.(channel);
     }
   }
 
@@ -160,6 +192,7 @@ export class GuildPlayer {
   }
 
   notifyQueueChanged(reason: string): void {
+    this.onChange?.();
     const next = this.queue.peekNext();
     const prefetchUrl = this.prefetchManager.getTargetUrl();
     if (prefetchUrl && prefetchUrl !== next?.url) {
@@ -169,6 +202,7 @@ export class GuildPlayer {
   }
 
   refreshPrefetch(): void {
+    this.onChange?.();
     this.schedulePrefetch();
   }
 
@@ -259,6 +293,12 @@ export class GuildPlayer {
       });
 
       await this.startPreparedStream(track, prepared);
+      if (this.lastStarted && this.lastStarted !== track) {
+        this.history.push(this.lastStarted);
+        if (this.history.length > 100) this.history.shift();
+      }
+      this.lastStarted = track;
+      this.onChange?.();
       this.lifecycle.onTrackStart?.(this.guildId, track.url);
       this.schedulePrefetch();
     } catch (error) {
@@ -334,6 +374,7 @@ export class GuildPlayer {
   setRepeatMode(mode: RepeatMode): RepeatMode {
     const previous = this.queue.repeatMode;
     const updated = this.queue.setRepeatMode(mode);
+    this.onChange?.();
     if (
       previous !== mode
       && (mode === 'list' || previous === 'list' || mode === 'shuffle' || previous === 'shuffle')
@@ -380,6 +421,10 @@ export class GuildPlayer {
       this.connection = null;
     }
     this.voiceChannelId = null;
+    this.muted = false;
+    this.history = [];
+    this.lastStarted = null;
+    this.onChange?.();
   }
 
   destroy(): void {
@@ -509,6 +554,7 @@ export class GuildPlayer {
       : this.queue.takeNextTrack();
 
     if (!next) {
+      this.onChange?.();
       logger.info(`Track transition end: finished="${finishedTitle}" next=none reason=${reason}`);
       this.killCurrentStreamOnly();
       this.prefetchManager.killAll();

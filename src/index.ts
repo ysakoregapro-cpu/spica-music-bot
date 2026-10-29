@@ -20,6 +20,9 @@ import * as shuffle from './commands/shuffle.js';
 import * as skip from './commands/skip.js';
 import * as skipto from './commands/skipto.js';
 import * as stop from './commands/stop.js';
+import * as player from './commands/player.js';
+import * as mute from './commands/mute.js';
+import { forgetPanel, handlePlayerButton, sendWelcome } from './music/PlayerPanel.js';
 import { musicManager } from './music/MusicManager.js';
 import { autoLeaveManager } from './music/AutoLeaveManager.js';
 import { getBuildLabel } from './utils/buildInfo.js';
@@ -43,6 +46,8 @@ const commandMap = new Map<string, BotCommand>([
   ['repeat', repeat],
   ['stop', stop],
   ['now', now],
+  ['player', player],
+  ['mute', mute],
 ]);
 
 const token = process.env.DISCORD_TOKEN;
@@ -64,6 +69,14 @@ client.on('error', (error) => {
   logger.error('Discord client error', error);
 });
 
+client.on(Events.GuildCreate, (guild) => {
+  void sendWelcome(guild).catch((error) => logger.error('Welcome menu failed', error));
+});
+client.on(Events.GuildDelete, (guild) => {
+  musicManager.remove(guild.id);
+  forgetPanel(guild.id);
+});
+
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   if (!client.user) {
     return;
@@ -73,6 +86,16 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 
 client.on(Events.InteractionCreate, async (interaction: Interaction) => {
   if (interaction.isButton()) {
+    if (interaction.customId.startsWith('spica:')) {
+      try { await handlePlayerButton(interaction, musicManager); }
+      catch (error) {
+        logger.error('Player button failed', error);
+        const content = '操作に失敗しました。接続と権限を確認して再度お試しください。';
+        if (interaction.deferred) await interaction.editReply(content).catch(() => undefined);
+        else if (!interaction.replied) await interaction.reply({ content, ephemeral: true }).catch(() => undefined);
+      }
+      return;
+    }
     if (
       interaction.customId === LIST_PREV_BUTTON_ID
       || interaction.customId === LIST_NEXT_BUTTON_ID

@@ -1,5 +1,6 @@
 import type { ChatInputCommandInteraction, Client, GuildMember, VoiceBasedChannel } from 'discord.js';
 import { GuildPlayer } from './GuildPlayer.js';
+import { ensureAutoPanel, refreshPanel } from './PlayerPanel.js';
 import { PlayJobQueue } from './PlayJobQueue.js';
 import { autoLeaveManager } from './AutoLeaveManager.js';
 import type { FetchResult } from './types.js';
@@ -122,6 +123,8 @@ export class MusicManager {
     }
 
     const player = new GuildPlayer(guildId);
+    player.onChange = () => refreshPanel(this, guildId);
+    player.onStatusChannel = (channel) => ensureAutoPanel(this, guildId, channel);
     this.players.set(guildId, player);
     return player;
   }

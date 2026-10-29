@@ -168,6 +168,18 @@ export class TrackQueue {
     this._current = track;
   }
 
+  /** Rewind within the waiting queue without changing the session repeat pool. */
+  returnToPrevious(track: Track): void {
+    const index = this.upcoming.lastIndexOf(track);
+    if (index < 0 && this.totalQueuedCount() >= MAX_QUEUE_SIZE) {
+      throw new Error('キューが上限のため前の曲に戻れません。');
+    }
+    if (index >= 0) this.upcoming.splice(index, 1);
+    if (this._current) this.upcoming.unshift(this._current);
+    this._current = track;
+    this.playedCountInCycle = Math.max(0, this.playedCountInCycle - 1);
+  }
+
   /**
    * Natural track end: move the finished track to the queue tail, then take the next track.
    * Default (off/list) rotates the queue; shuffle-repeat shuffles only at cycle boundaries.
