@@ -160,7 +160,7 @@ export async function sendWelcome(guild: Guild): Promise<void> {
     if (!channel.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) continue;
     try {
       await channel.send({
-        content: 'はじめまして！音楽bot Spring triangleです！\nコマンドは主にplay,repeat,shuffle,stop等がありますが、スラッシュを入力すると見えます！\nボイスチャンネルに人がいなくなると勝手に消えます！\n\n音楽を聞きたくない方は、下のボタンから自分だけミュートする方法を確認できます。ボタンは設定手順の案内です。\nその他不明点は作者まで問い合わせお願いします！@saisa_you',
+        content: 'はじめまして！音楽bot Spicaです！\nコマンドは主にplay,repeat,shuffle,stop等がありますが、スラッシュを入力すると見えます！\nボイスチャンネルに人がいなくなると勝手に消えます！\n\n音楽を聞きたくない方は、下のボタンから自分だけミュートする方法を確認できます。ボタンは設定手順の案内です。\nその他不明点は作者まで問い合わせお願いします！@saisa_you',
         components: controls(true), allowedMentions: { parse: [] },
       });
       return;
