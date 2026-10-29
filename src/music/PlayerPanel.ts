@@ -19,7 +19,7 @@ export function forgetPanel(guildId: string): void {
 
 export function controls(welcome = false, muteOnly = false) {
   const items = welcome
-    ? [['open', 'プレイヤーを開く'], ['mute', 'ミュート'], ['unmute', 'ミュート解除'], ['help', 'コマンド一覧']]
+    ? [['personal-mute', '自分だけミュートする方法'], ['personal-unmute', 'ミュート解除の方法']]
     : [['previous', '⏮ 前へ'], ['next', '次へ ⏭'], ['mute', 'ミュート'], ['unmute', 'ミュート解除']];
   return [new ActionRowBuilder<ButtonBuilder>().addComponents(items.filter(([id]) => !muteOnly || id === 'mute' || id === 'unmute').map(([id, label]) =>
     new ButtonBuilder().setCustomId(`spica:${id}`).setLabel(label!).setStyle(ButtonStyle.Secondary)))];
@@ -99,6 +99,13 @@ export async function openPanel(interaction: ControlInteraction, manager: MusicM
 
 export async function handlePlayerButton(interaction: ButtonInteraction, manager: MusicManager): Promise<void> {
   const action = interaction.customId.slice('spica:'.length);
+  if (action === 'personal-mute' || action === 'personal-unmute') {
+    const content = action === 'personal-mute'
+      ? '自分だけ音楽を聞こえなくするには、DiscordでSpring Triangleを右クリックし、個別の「ミュート」をオンにするか「ユーザー音量」を0%にしてください。スマートフォンではBotのプロフィール／VCのメンバー操作から音量を調整してください。\nこのボタンは手順の案内です。設定はまだ変更されていません。VC参加前でも案内は開けますが、設定項目が表示されない場合はBotと同じVCに入ってから設定してください。\n「サーバーミュート」ではなく個別のミュートを使用してください。他の人には影響しません。'
+      : 'DiscordでSpring Triangleの個別の「ミュート」をオフにし、「ユーザー音量」を必要な音量に戻してください。スマートフォンではBotのプロフィール／VCのメンバー操作から調整してください。\nこのボタンは手順の案内です。設定はまだ変更されていません。';
+    await interaction.reply({ content, ephemeral: true, allowedMentions: { parse: [] } });
+    return;
+  }
   if (action === 'open') return openPanel(interaction, manager);
   if (action === 'help') {
     await interaction.reply({ content: '/play /player /mute /repeat /shuffle /skip /skipto /nextplay /list /now /stop', ephemeral: true });
@@ -153,7 +160,7 @@ export async function sendWelcome(guild: Guild): Promise<void> {
     if (!channel.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) continue;
     try {
       await channel.send({
-        content: 'はじめまして！音楽bot Spring triangleです！\nコマンドは主にplay,repeat,shuffle,stop等がありますが、スラッシュを入力すると見えます！\nボイスチャンネルに人がいなくなると勝手に消えます！\n\n/player で再生中の曲と操作ボタンを表示できます。\nその他不明点は作者まで問い合わせお願いします！@saisa_you',
+        content: 'はじめまして！音楽bot Spring triangleです！\nコマンドは主にplay,repeat,shuffle,stop等がありますが、スラッシュを入力すると見えます！\nボイスチャンネルに人がいなくなると勝手に消えます！\n\n音楽を聞きたくない方は、下のボタンから自分だけミュートする方法を確認できます。ボタンは設定手順の案内です。\nその他不明点は作者まで問い合わせお願いします！@saisa_you',
         components: controls(true), allowedMentions: { parse: [] },
       });
       return;

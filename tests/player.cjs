@@ -72,9 +72,18 @@ test('mute menu has exactly mute and unmute; payload escapes mentions and reflec
 
 test('welcome falls back to writable channel and sends only once',async()=>{
   let sent=0;
-  const channel=(id,allowed)=>({id,isTextBased:()=>true,isSendable:()=>true,isThread:()=>false,permissionsFor:()=>({has:()=>allowed}),send:async(payload)=>{sent++;assert.equal(payload.components[0].toJSON().components.length,4);}});
+  const channel=(id,allowed)=>({id,isTextBased:()=>true,isSendable:()=>true,isThread:()=>false,permissionsFor:()=>({has:()=>allowed}),send:async(payload)=>{sent++;assert.deepEqual(payload.components[0].toJSON().components.map(x=>x.custom_id),['spica:personal-mute','spica:personal-unmute']);}});
   const g={id:'welcome-test',members:{fetchMe:async()=>({})},systemChannel:channel('system',false),channels:{fetch:async()=>new Map([['ok',channel('ok',true)]])}};
   await sendWelcome(g); await sendWelcome(g); assert.equal(sent,1);
+});
+
+test('personal mute guidance works before voice join without accessing voice state', async () => {
+  for (const action of ['personal-mute','personal-unmute']) {
+    let reply;
+    await handlePlayerButton({customId:`spica:${action}`,reply:async(v)=>{reply=v;}},new MusicManager());
+    assert.equal(reply.ephemeral,true);
+    assert.match(reply.content,/設定はまだ変更されていません/);
+  }
 });
 
 test('same VC can mute; transitions and concurrent button actions are rejected', async () => {
