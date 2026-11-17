@@ -5,6 +5,7 @@ import {
 import type { MusicManager } from './MusicManager.js';
 import { logger } from '../utils/logger.js';
 import { formatRepeatMode, formatTrackDuration } from '../utils/format.js';
+import { resolveTrackThumbnail, resolveTrackWatchUrl } from './youtubeThumbnail.js';
 
 type ControlInteraction = ButtonInteraction | ChatInputCommandInteraction;
 const panels = new Map<string, Message>();
@@ -47,7 +48,12 @@ export function panelPayload(manager: MusicManager, guildId: string) {
       { name: '音声', value: player?.isMuted ? 'ミュート中' : 'ON', inline: true },
       { name: '曲の長さ', value: formatTrackDuration(track?.duration ?? null), inline: true },
     ).setFooter({ text: '操作はBotと同じVCから • ミュートはVC全員に適用されます' });
-  if (track) embed.setURL(track.url);
+  if (track) {
+    const watchUrl = resolveTrackWatchUrl(track);
+    const thumbnail = resolveTrackThumbnail(track);
+    if (watchUrl) embed.setURL(watchUrl);
+    if (thumbnail) embed.setImage(thumbnail);
+  }
   return { embeds: [embed], components: controls(), allowedMentions: { parse: [] as never[] } };
 }
 

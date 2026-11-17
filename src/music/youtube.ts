@@ -18,6 +18,7 @@ import {
   YTDLP_BIN,
 } from './ytdlp.js';
 import { logger } from '../utils/logger.js';
+import { youtubeMediaFields } from './youtubeThumbnail.js';
 
 /**
  * Audio pipeline routes:
@@ -122,6 +123,8 @@ interface YtDlpEntry {
   webpage_url?: string;
   url?: string;
   duration?: number | null;
+  thumbnail?: string;
+  thumbnails?: Array<{ url?: string; height?: number }>;
   is_live?: boolean;
   live_status?: string;
 }
@@ -182,6 +185,7 @@ function entryToTrack(entry: YtDlpEntry, requestedBy: string): Track | null {
     url,
     duration: entry.duration,
     requestedBy,
+    ...youtubeMediaFields(entry),
   };
 }
 

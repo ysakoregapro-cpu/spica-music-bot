@@ -15,6 +15,7 @@ import {
   musicResolverItemsToTracks,
   shouldTriggerMusicResolver,
 } from './youtubeMusicResolver.js';
+import { youtubeMediaFields } from './youtubeThumbnail.js';
 
 /** Use single flat-playlist call when the requested count is at most this. */
 export const FLAT_SINGLE_MAX = 100;
@@ -63,6 +64,8 @@ interface YtDlpEntry {
   webpage_url?: string;
   url?: string;
   duration?: number | null;
+  thumbnail?: string;
+  thumbnails?: Array<{ url?: string; height?: number }>;
   is_live?: boolean;
   live_status?: string;
 }
@@ -149,6 +152,7 @@ function entryToLightweightTrack(entry: YtDlpEntry, requestedBy: string): Track 
     duration:
       entry.duration != null && entry.duration > 0 ? entry.duration : null,
     requestedBy,
+    ...youtubeMediaFields(entry),
   };
 }
 
@@ -300,6 +304,7 @@ function entryToFullTrack(entry: YtDlpEntry, requestedBy: string): Track | null 
     url,
     duration: entry.duration,
     requestedBy,
+    ...youtubeMediaFields(entry),
   };
 }
 

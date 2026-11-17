@@ -14,6 +14,10 @@ export interface Track {
   /** Null when not resolved at playlist import time; shown as --:-- in /list. */
   duration: number | null;
   requestedBy: string;
+  /** YouTube video id from the source. Preferred over parsing `url`. */
+  videoId?: string;
+  /** YouTube thumbnail URL from the source. Preferred over building one from `videoId`. */
+  thumbnail?: string;
 }
 
 export interface FetchResult {

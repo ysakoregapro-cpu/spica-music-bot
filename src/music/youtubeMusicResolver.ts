@@ -4,6 +4,7 @@ import { extractPlaylistListId } from '../utils/validators.js';
 import { logger } from '../utils/logger.js';
 import { resolveCookiesPath } from './ytdlp.js';
 import type { Track } from './types.js';
+import { extractYouTubeThumbnailUrl, youtubeMediaFields } from './youtubeThumbnail.js';
 
 export const MUSIC_RESOLVER_MIN_PLAYLIST_COUNT = 200;
 export const MUSIC_RESOLVER_VISIBLE_RATIO = 0.5;
@@ -11,6 +12,7 @@ export const MUSIC_RESOLVER_VISIBLE_RATIO = 0.5;
 export interface MusicResolverVideoItem {
   videoId: string;
   title?: string;
+  thumbnail?: string;
 }
 
 export interface MusicResolverResult {
@@ -153,7 +155,7 @@ function extractVideoIdFromMusicItem(item: unknown): MusicResolverVideoItem | nu
     ? titleRaw.trim()
     : titleRaw?.toString()?.trim();
 
-  return title ? { videoId, title } : { videoId };
+  return withResolverThumbnail(item, title ? { videoId, title } : { videoId });
 }
 
 function extractVideoIdFromPlaylistVideo(item: unknown): MusicResolverVideoItem | null {
@@ -177,7 +179,12 @@ function extractVideoIdFromPlaylistVideo(item: unknown): MusicResolverVideoItem 
   }
 
   const title = candidate.title?.toString()?.trim();
-  return title ? { videoId, title } : { videoId };
+  return withResolverThumbnail(item, title ? { videoId, title } : { videoId });
+}
+
+function withResolverThumbnail(item: unknown, video: MusicResolverVideoItem): MusicResolverVideoItem {
+  const thumbnail = extractYouTubeThumbnailUrl(item);
+  return thumbnail ? { ...video, thumbnail } : video;
 }
 
 function countItemTypes(items: readonly unknown[]): string {
@@ -405,6 +412,7 @@ export function musicResolverItemsToTracks(
     url: `https://music.youtube.com/watch?v=${item.videoId}`,
     duration: null,
     requestedBy,
+    ...youtubeMediaFields({ videoId: item.videoId, thumbnail: item.thumbnail }),
   }));
 }
 
